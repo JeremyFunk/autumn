@@ -46,6 +46,10 @@ const getRuntimeMetadata = (): RuntimeMetadata => ({
 	runtimeVersion: process.versions.node,
 });
 
+// DEMO ONLY (not part of the Maple PR): lets the worker process report under
+// its own name so the queue hop shows as a service-to-service edge.
+const SERVICE_NAME = process.env.OTEL_SERVICE_NAME ?? "autumn-server";
+
 export const createOtelServiceInstanceId = () => randomBytes(8).toString("hex");
 
 export const buildCompactOtelResourceAttributes = ({
@@ -53,7 +57,7 @@ export const buildCompactOtelResourceAttributes = ({
 }: {
 	serviceInstanceId: string;
 }): Attributes => ({
-	"service.name": "autumn-server",
+	"service.name": SERVICE_NAME,
 	"service.instance.id": serviceInstanceId,
 });
 
@@ -69,7 +73,7 @@ export const buildOtelResourceDefinitionAttributes = ({
 	telemetrySdk?: TelemetrySdkMetadata;
 }): Attributes => ({
 	"otel.definition.type": "resource",
-	"service.name": "autumn-server",
+	"service.name": SERVICE_NAME,
 	"service.instance.id": serviceInstanceId,
 	"host.arch": runtime.hostArch,
 	"host.name": runtime.hostName,
