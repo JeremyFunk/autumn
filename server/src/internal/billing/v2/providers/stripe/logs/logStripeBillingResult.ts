@@ -1,5 +1,8 @@
 import type { StripeBillingPlanResult } from "@autumn/shared";
-import { stripeInvoiceToStripeSubscriptionId } from "@/external/stripe/invoices/utils/convertStripeInvoice";
+import {
+	stripeInvoiceToSpanAttributes,
+	stripeInvoiceToStripeSubscriptionId,
+} from "@/external/stripe/invoices/utils/convertStripeInvoice";
 import type { AutumnContext } from "@/honoUtils/HonoEnv";
 import { addToExtraLogs } from "@/utils/logging/addToExtraLogs";
 import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
@@ -22,8 +25,9 @@ export const logStripeBillingResult = ({
 }) => {
 	setRootSpanAttributes({
 		"stripe.subscription_id": result.stripeSubscription?.id,
-		"stripe.invoice_id": result.stripeInvoice?.id,
+		...stripeInvoiceToSpanAttributes(result.stripeInvoice),
 		"billing.deferred": result.deferred ?? false,
+		"billing.required_action": result.requiredAction?.code,
 	});
 
 	addToExtraLogs({

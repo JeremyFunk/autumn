@@ -5,7 +5,7 @@ import { normalizeErrorValues, resolveDeployment } from "@autumn/logging";
 import pino from "pino";
 import { getAwsTaskIdentity } from "@/external/aws/ecs/awsTaskIdentity.js";
 import { createMapleLogStreams } from "@/external/maple/createMapleLogStreams.js";
-import { recordLogAsMapleSpanEvent } from "@/external/maple/mapleTraceScope.js";
+import { slimMapleLogLine } from "@/external/maple/mapleTraceScope.js";
 import { classifyInfraError } from "./classifyInfraError.js";
 
 /**
@@ -262,7 +262,7 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 		classifiers: [classifyInfraError],
 	});
 
-	const logger = pino(
+	const logger: pino.Logger = pino(
 		{
 			level: isDev || isTest || mode === "dual" ? "debug" : "info",
 			base: {
@@ -272,7 +272,13 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 			},
 			hooks: {
 				logMethod(args, method, level) {
-					if (recordLogAsMapleSpanEvent({ args, level })) return;
+					const slim = slimMapleLogLine({ args, level });
+					if (slim === "drop") return;
+					// Written through the root logger, which has none of the request bindings.
+					if (slim) {
+						method.apply(logger, slim as typeof args);
+						return;
+					}
 					errorLogHook?.call(this, args, method, level);
 				},
 			},

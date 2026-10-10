@@ -8,6 +8,7 @@ import { isAutumnOriginatedStripeEvent } from "@/external/stripe/common/autumnSt
 import type { StripeWebhookContext } from "@/external/stripe/webhookMiddlewares/stripeWebhookContext";
 import { addProductsUpdatedWebhookTask } from "@/internal/analytics/handlers/handleProductsUpdated";
 import { CusProductService } from "@/internal/customers/cusProducts/CusProductService";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	trackCustomerProductDeletion,
 	trackCustomerProductUpdate,
@@ -97,6 +98,7 @@ export const handleStripeSubscriptionRenewed = async ({
 			customerProduct,
 			updates,
 		});
+		setRootSpanAttributes({ "stripe.webhook.outcome": "subscription_renewed" });
 
 		logger.info(
 			`[handleStripeSubscriptionRenewed] Cleared cancellation for ${customerProduct.product.name}`,

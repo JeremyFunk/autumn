@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import { handleCheckoutSessionEnabledImmediately } from "@/external/stripe/webhookHandlers/handleStripeCheckoutSessionCompleted/tasks/handleCheckoutSessionEnabledImmediately/handleCheckoutSessionEnabledImmediately.js";
 import { handleCheckoutSessionMetadataV2 } from "@/external/stripe/webhookHandlers/handleStripeCheckoutSessionCompleted/tasks/handleCheckoutSessionMetadataV2/handleCheckoutSessionMetadataV2.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext.js";
 import { setupCheckoutSessionCompletedContext } from "./setupCheckoutSessionCompletedContext.js";
 import { handleLegacyCheckoutSessionMetadata } from "./tasks/handleLegacyCheckoutSessionMetadata.ts/handleCheckoutSessionCompletedLegacy.js";
@@ -18,6 +19,14 @@ export const handleStripeCheckoutSessionCompleted = async ({
 	const checkoutContext = await setupCheckoutSessionCompletedContext({
 		ctx,
 		event,
+	});
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "checkout_completed",
+		"stripe.checkout_mode": checkoutContext.stripeCheckoutSession.mode,
+		"stripe.webhook.metadata_type": checkoutContext.metadata?.type ?? undefined,
+		"stripe.subscription_id": checkoutContext.stripeSubscription?.id,
+		"stripe.invoice_id": checkoutContext.stripeInvoice?.id,
 	});
 
 	// V2 flow (deferred — cusProducts inserted here by webhook)

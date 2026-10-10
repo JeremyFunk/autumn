@@ -1,5 +1,6 @@
 import type { DrizzleCli } from "@/db/initDrizzle.js";
 import type { Logger } from "@/external/logtail/logtailUtils.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { classifyBatchResetContext } from "./compute/classifyBatchResetContext.js";
 import { computeResetMutations } from "./compute/computeResets/computeResetMutations.js";
 import { computeVerdictMutations } from "./compute/computeVerdictMutations.js";
@@ -54,6 +55,12 @@ export const batchResetCustomerEntitlementsV2 = async ({
 	await executeVerdictMutations({ db, verdictMutations });
 	const { appliedCustomerEntitlementIds, staleSkippedCount } =
 		await executeResetMutations({ db, resetMutations });
+
+	setRootSpanAttributes({
+		"reset.planned": resetMutations.length,
+		"reset.applied": appliedCustomerEntitlementIds.size,
+		"reset.stale_skipped": staleSkippedCount,
+	});
 
 	if (staleSkippedCount > 0) {
 		// A concurrent reset (usually a lazy reset racing this worker) won —

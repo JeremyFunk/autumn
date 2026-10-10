@@ -154,7 +154,7 @@ export function trackOutcomesToApiResponse({
 		balance: () => ({
 			after:
 				fundingBalances.length === 1 ? fundingBalances[0].remaining : undefined,
-			deducted: sumValues(deductions.map((deduction) => deduction.value)),
+			deducted: sumValues(deductions.map((deduction) => deduction.value ?? 0)),
 		}),
 	});
 

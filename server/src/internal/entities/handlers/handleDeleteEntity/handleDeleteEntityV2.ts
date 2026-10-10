@@ -4,6 +4,7 @@ import {
 	RecaseError,
 	Scopes,
 } from "@autumn/shared";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { createRoute } from "../../../../honoMiddlewares/routeHandler.js";
 import { findCustomerForEntity } from "../../actions/findCustomer.js";
 import { entityActions } from "../../actions/index.js";
@@ -14,6 +15,11 @@ export const handleDeleteEntityV2 = createRoute({
 	handler: async (c) => {
 		const ctx = c.get("ctx");
 		const body = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"entity.action": "delete",
+			"entity.id": body.entity_id,
+		});
 
 		let customerId = body.customer_id;
 		if (!customerId) {

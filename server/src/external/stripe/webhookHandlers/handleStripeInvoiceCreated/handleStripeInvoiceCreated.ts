@@ -1,6 +1,7 @@
 import { secondsToMs } from "@autumn/shared";
 import type Stripe from "stripe";
 import { getStripeInvoice } from "@/external/stripe/invoices/operations/getStripeInvoice";
+import { stripeInvoiceToSpanAttributes } from "@/external/stripe/invoices/utils/convertStripeInvoice.js";
 import {
 	storeRenewalLineItems,
 	upsertAutumnInvoice,
@@ -11,6 +12,7 @@ import { processAllocatedPricesForInvoiceCreated } from "@/external/stripe/webho
 import { processPrepaidPricesForInvoiceCreated } from "@/external/stripe/webhookHandlers/handleStripeInvoiceCreated/tasks/processPrepaidPricesForInvoiceCreated";
 import { executeAutumnBillingPlan } from "@/internal/billing/v2/execute/executeAutumnBillingPlan/executeAutumnBillingPlan";
 import { createAutumnBillingPlanBuilder } from "@/internal/billing/v2/utils/billingPlanBuilder/createAutumnBillingPlanBuilder";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext";
 import { setupInvoiceCreatedContext } from "./setupInvoiceCreatedContext";
 import { processConsumablePricesForInvoiceCreated } from "./tasks/processConsumablePricesForInvoiceCreated";
@@ -31,8 +33,17 @@ export const handleStripeInvoiceCreated = async ({
 
 	if (!eventContext) {
 		ctx.logger.debug("[invoice.created] Skipping - context not found");
+		setRootSpanAttributes({ "stripe.webhook.outcome": "skipped_no_context" });
 		return;
 	}
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "invoice_created",
+		...stripeInvoiceToSpanAttributes(eventContext.stripeInvoice),
+		"stripe.invoice_billing_reason":
+			eventContext.stripeInvoice.billing_reason ?? undefined,
+		"stripe.subscription_id": eventContext.stripeSubscription.id,
+	});
 
 	ctx.logger.info(
 		`[invoice.created] Processing for invoice ${eventContext.stripeInvoice.id}`,
@@ -61,6 +72,7 @@ export const handleStripeInvoiceCreated = async ({
 			autumnBillingPlan: plan.build(),
 		});
 		eventContext.results.customerStateChanged = true;
+		setRootSpanAttributes({ "stripe.webhook.customer_state_changed": true });
 	}
 
 	// 3. Mirror the invoice

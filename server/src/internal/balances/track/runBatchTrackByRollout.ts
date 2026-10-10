@@ -1,6 +1,7 @@
 import type { BatchTrackParams } from "@autumn/shared";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { TokenDeduction } from "../utils/types/featureDeduction.js";
 import { runBalanceWorkerBatchTrack } from "./balanceWorker/runBalanceWorkerBatchTrack.js";
 import {
@@ -39,6 +40,15 @@ export const runBatchTrackByRollout = async ({
 	/** Per item, aligned with `body`: set for batch track_tokens items. */
 	tokens?: (TokenDeduction | undefined)[];
 }): Promise<void> => {
+	// One stamp for the whole batch: per-item attributes would overwrite each other.
+	setRootSpanAttributes(() => ({
+		"track.batch_size": body.length,
+		"track.batch_features":
+			[...new Set(body.flatMap((item) => item.feature_id ?? []))]
+				.slice(0, 10)
+				.join(",") || undefined,
+	}));
+
 	const { worker, legacy } = partitionByRollout({
 		ctx,
 		entries: toBatchTrackEntries({ body, tokens }),

@@ -6,6 +6,7 @@ import {
 	trace,
 } from "@opentelemetry/api";
 import type Stripe from "stripe";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
 import { otelConfig } from "./otelConfig.js";
 
 const TRACER_NAME = "autumn.stripe";
@@ -114,7 +115,7 @@ export const instrumentStripe = ({ client }: { client: Stripe }): Stripe => {
 			try {
 				const statusCode = response.getStatusCode();
 				span.setAttribute("http.response.status_code", statusCode);
-				failed = statusCode >= 400;
+				failed = isMapleEnabled && statusCode >= 400;
 			} catch {
 				// Ignore response inspection failures
 			}

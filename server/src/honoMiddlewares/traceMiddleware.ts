@@ -1,6 +1,6 @@
 import { context, trace } from "@opentelemetry/api";
 import type { MiddlewareHandler } from "hono";
-import { getMapleTraceMark } from "@/external/maple/mapleTraceScope.js";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
 
@@ -8,8 +8,6 @@ import {
 	type TenantAttrs,
 	withTenantContext,
 } from "@/utils/otel/tenantContext.js";
-
-const MAX_REQUEST_BODY_ATTR_LENGTH = 2048;
 
 /**
  * Stamps tenant attrs onto the root HTTP span, then wraps the rest of the
@@ -45,17 +43,8 @@ export const traceEnrichMiddleware: MiddlewareHandler = async (c, next) => {
 			if (value === undefined) continue;
 			rootSpan.setAttribute(key, value);
 		}
-		if (ctx.apiKeyId) rootSpan.setAttribute("api_key_id", ctx.apiKeyId);
-
-		// Kept traces answer "what was asked"; sampled ones stay small.
-		const body = ctx.requestLogContext?.body;
-		const { traceId } = rootSpan.spanContext();
-		if (body && getMapleTraceMark(traceId)?.mode === "keep") {
-			rootSpan.setAttribute(
-				"http.request.body",
-				JSON.stringify(body).slice(0, MAX_REQUEST_BODY_ATTR_LENGTH),
-			);
-		}
+		if (isMapleEnabled && ctx.apiKeyId)
+			rootSpan.setAttribute("api_key_id", ctx.apiKeyId);
 	}
 
 	return withTenantContext({ attrs, fn: () => next() });

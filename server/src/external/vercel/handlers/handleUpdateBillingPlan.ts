@@ -5,6 +5,7 @@ import { z } from "zod/v4";
 import { createStripeCli } from "@/external/connect/createStripeCli.js";
 import { provisionVercelCusProduct } from "@/external/vercel/misc/vercelProvisioning.js";
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { VercelError, VercelNotification } from "../misc/vercelTypes.js";
 import { productToBillingPlan } from "./handleListBillingPlans.js";
 
@@ -20,6 +21,12 @@ export const handleUpdateVercelBillingPlan = createRoute({
 		const { org, logger, fullCustomer: customer } = ctx;
 
 		const { billingPlanId } = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"vercel.action": "installation.update",
+			"vercel.installation_id": integrationConfigurationId,
+			"vercel.billing_plan_id": billingPlanId,
+		});
 
 		if (!customer) {
 			throw new RecaseError({

@@ -11,6 +11,7 @@ import { addProductsUpdatedWebhookTask } from "@/internal/analytics/handlers/han
 import { customerLicenseRepo } from "@/internal/licenses/repos/customerLicenseRepo.js";
 import { planLicenseRepo } from "@/internal/licenses/repos/planLicenseRepo.js";
 import { ProductService } from "@/internal/products/ProductService.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { CusService } from "../CusService.js";
 import { CusProductService } from "../cusProducts/CusProductService.js";
 import { findTransferCustomerProduct } from "./handleTransferProduct/findTransferCustomerProduct.js";
@@ -38,6 +39,13 @@ export const handleTransferProductV2 = createRoute({
 		const { customer_id } = c.req.param();
 		const { from_entity_id, to_entity_id, product_id, customer_product_id } =
 			c.req.valid("json");
+
+		setRootSpanAttributes({
+			"billing.action": "transfer",
+			"billing.plan_id": product_id,
+			"billing.transfer.from_entity_id": from_entity_id ?? undefined,
+			"billing.transfer.to_entity_id": to_entity_id ?? undefined,
+		});
 
 		if (!from_entity_id && !to_entity_id) {
 			throw new RecaseError({

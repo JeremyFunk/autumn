@@ -5,6 +5,10 @@ import type {
 	SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import {
+	isInMapleSampleRate,
+	MAPLE_TRACE_SAMPLE_RATE,
+} from "@/external/maple/mapleSampling.js";
+import {
 	getMapleTraceMark,
 	type MapleTraceMode,
 	promoteMapleTrace,
@@ -16,15 +20,12 @@ import { TENANT_ATTR_KEYS } from "./tenantContext.js";
 const MAX_BUFFERED_TRACES = 2_000;
 const MAX_SPANS_PER_BUFFERED_TRACE = 256;
 
-const parseRate = (value: string | undefined, fallback: number) => {
-	const rate = Number.parseFloat(value ?? "");
-	return Number.isFinite(rate) ? Math.min(Math.max(rate, 0), 1) : fallback;
-};
-
 type TraceMarks = {
 	get: (
 		traceId: string,
-	) => { mode: MapleTraceMode; rootSpanId: string } | undefined;
+	) =>
+		| { mode: MapleTraceMode; rootSpanId: string; rootSpanIds?: Set<string> }
+		| undefined;
 	promote: (traceId: string) => void;
 	unmark: (traceId: string) => void;
 };
@@ -33,15 +34,6 @@ const defaultMarks: TraceMarks = {
 	get: getMapleTraceMark,
 	promote: promoteMapleTrace,
 	unmark: unmarkMapleTrace,
-};
-
-const hashToUnitInterval = (value: string) => {
-	let hash = 2166136261;
-	for (let i = 0; i < value.length; i++) {
-		hash ^= value.charCodeAt(i);
-		hash = Math.imul(hash, 16777619);
-	}
-	return (hash >>> 0) / 0xffffffff;
 };
 
 const durationMs = (span: ReadableSpan) =>
@@ -80,7 +72,7 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 			slowMs: number;
 			marks: TraceMarks;
 		} = {
-			sampleRate: parseRate(process.env.MAPLE_TRACE_SAMPLE_RATE, 0.1),
+			sampleRate: MAPLE_TRACE_SAMPLE_RATE,
 			slowMs: Number(process.env.MAPLE_TRACE_SLOW_MS) || 1000,
 			marks: defaultMarks,
 		},
@@ -92,13 +84,20 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 		const { traceId, spanId } = span.spanContext();
 		const mark = this.options.marks.get(traceId);
 		if (!mark) return;
-		const isRoot = spanId === mark.rootSpanId;
+		// Every request or job span of the trace keeps its tenant attrs; only the
+		// first one decides a sampled trace.
+		const isRoot =
+			spanId === mark.rootSpanId || mark.rootSpanIds?.has(spanId) === true;
+		const exported = isRoot ? span : withoutTenantAttrs(span);
 		if (mark.mode === "keep") {
-			this.delegate.onEnd(isRoot ? span : withoutTenantAttrs(span));
+			// A trace promoted mid-flight (a second, kept request under the same
+			// trace id) still has spans waiting on the first root's verdict.
+			this.flush(traceId);
+			this.delegate.onEnd(exported);
 			return;
 		}
-		if (!isRoot) {
-			this.buffer(traceId, withoutTenantAttrs(span));
+		if (spanId !== mark.rootSpanId) {
+			this.buffer(traceId, exported);
 			return;
 		}
 
@@ -107,7 +106,7 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 		const kept =
 			isAlwaysKeptRoot(span) ||
 			durationMs(span) >= this.options.slowMs ||
-			hashToUnitInterval(traceId) < this.options.sampleRate;
+			isInMapleSampleRate({ traceId, sampleRate: this.options.sampleRate });
 		if (!kept) {
 			this.options.marks.unmark(traceId);
 			return;
@@ -116,6 +115,13 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 		this.options.marks.promote(traceId);
 		for (const child of buffered) this.delegate.onEnd(child);
 		this.delegate.onEnd(span);
+	}
+
+	private flush(traceId: string) {
+		const buffered = this.buffers.get(traceId);
+		if (!buffered) return;
+		this.buffers.delete(traceId);
+		for (const span of buffered) this.delegate.onEnd(span);
 	}
 
 	private buffer(traceId: string, span: ReadableSpan) {

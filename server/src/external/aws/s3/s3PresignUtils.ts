@@ -4,6 +4,7 @@ import {
 	PutObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import { getS3Client } from "./initS3.js";
 
 const PRESIGNED_URL_EXPIRES_IN = 300;
@@ -90,5 +91,15 @@ export const deleteS3Object = async ({
 }) => {
 	const client = getS3Client({ region, credentials });
 
-	await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+	await withDependencySpan({
+		name: "s3.delete_object",
+		attributes: {
+			"rpc.system": "aws-api",
+			"rpc.service": "S3",
+			"rpc.method": "DeleteObject",
+			"aws.s3.bucket": bucket,
+		},
+		fn: () =>
+			client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })),
+	});
 };

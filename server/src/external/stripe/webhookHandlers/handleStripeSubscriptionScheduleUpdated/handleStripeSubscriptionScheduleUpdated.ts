@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext.js";
 import { setupScheduleUpdatedContext } from "./setupScheduleUpdatedContext.js";
 import { applyStartedScheduleFuturePhaseEdit } from "./tasks/applyStartedScheduleFuturePhaseEdit.js";
@@ -20,6 +21,14 @@ export const handleStripeSubscriptionScheduleUpdated = async ({
 
 	await applyStartedScheduleFuturePhaseEdit({ ctx, eventContext });
 	await resyncScheduledCustomerProductStartsAt({ ctx, eventContext });
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "schedule_updated",
+		"stripe.webhook.detached_phases":
+			eventContext.results.detachedFuturePhases?.detachedCount,
+		"stripe.webhook.moved_phases":
+			eventContext.results.movedPhaseStarts?.length,
+	});
 
 	ctx.handlerResult = { type: event.type, context: eventContext };
 };

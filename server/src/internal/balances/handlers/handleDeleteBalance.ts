@@ -5,6 +5,7 @@ import {
 	Scopes,
 } from "@autumn/shared";
 import { createRoute } from "@/honoMiddlewares/routeHandler";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { deleteBalance } from "../deleteBalance/deleteBalance";
 
 export const handleDeleteBalance = createRoute({
@@ -14,6 +15,12 @@ export const handleDeleteBalance = createRoute({
 	handler: async (c) => {
 		const ctx = c.get("ctx");
 		const params = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"balance.action": "delete",
+			"balance.feature_id": params.feature_id,
+			"balance.id": params.balance_id,
+		});
 
 		await deleteBalance({
 			ctx,

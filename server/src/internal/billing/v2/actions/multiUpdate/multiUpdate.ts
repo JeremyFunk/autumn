@@ -13,6 +13,7 @@ import { voidInvoicesOnImmediateCancel } from "@/internal/billing/v2/execute/voi
 import { logStripeBillingPlan } from "@/internal/billing/v2/providers/stripe/logs/logStripeBillingPlan";
 import { setupFullCustomerContext } from "@/internal/billing/v2/setup/setupFullCustomerContext";
 import { logAutumnBillingPlan } from "@/internal/billing/v2/utils/logs/logAutumnBillingPlan";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { computeMultiUpdateFold } from "./compute/computeMultiUpdateFold";
 import { handleMultiUpdateErrors } from "./errors/handleMultiUpdateErrors";
 import { evaluateMultiUpdateStripe } from "./evaluate/evaluateMultiUpdateStripe";
@@ -34,6 +35,16 @@ export async function multiUpdate({
 	params: MultiUpdateParamsV0;
 	preview?: boolean;
 }): Promise<MultiUpdateResult> {
+	setRootSpanAttributes(() => ({
+		"billing.action": "multi_update",
+		"billing.plan_ids":
+			params.updates
+				.flatMap((update) => update.plan_id ?? [])
+				.slice(0, 10)
+				.join(",") || undefined,
+		"billing.preview": preview || undefined,
+	}));
+
 	ctx.logger.info(
 		`=============== RUNNING MULTI UPDATE FOR ${params.customer_id} ===============`,
 	);

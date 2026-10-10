@@ -13,6 +13,7 @@ import type {
 import { type Context, Hono } from "hono";
 import { analyticsMiddleware } from "@/honoMiddlewares/analyticsMiddleware.js";
 import { traceEnrichMiddleware } from "@/honoMiddlewares/traceMiddleware.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { getRevenuecatWebhookSecret } from "./misc/getRevenuecatWebhookSecret";
 import {
 	revenuecatLogMiddleware,
@@ -55,8 +56,16 @@ revenuecatWebhookRouter.post(
 					secretConfigured: Boolean(webhookSecret),
 					authorizationProvided: Boolean(Authorization),
 				});
+				setRootSpanAttributes({ "revenuecat.webhook.outcome": "unauthorized" });
 				return c.json({ error: "Unauthorized" }, 401);
 			}
+
+			// "handled" stands unless the event type has no handler below.
+			setRootSpanAttributes(() => ({
+				"revenuecat.event.type": body.event.type,
+				"revenuecat.event.id": (body.event as { id?: string }).id,
+				"revenuecat.webhook.handled": true,
+			}));
 
 			// Set event type in context for logging in refresh middleware
 			ctx.revenuecatEventType = body.event.type;
@@ -110,10 +119,15 @@ revenuecatWebhookRouter.post(
 						ctx,
 					});
 					break;
+				default:
+					setRootSpanAttributes({ "revenuecat.webhook.handled": false });
+					break;
 			}
 
+			setRootSpanAttributes({ "revenuecat.webhook.outcome": "processed" });
 			return c.json({ success: true }, 200);
 		} catch (error) {
+			setRootSpanAttributes({ "revenuecat.webhook.outcome": "failed" });
 			reportError({ ctx: { logger }, error, operation: "revenuecat webhook" });
 			return c.json({ error: `Internal server error: ${error}` }, 500);
 		}

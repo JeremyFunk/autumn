@@ -1,5 +1,6 @@
 import type { StripeWebhookContext } from "@/external/stripe/webhookMiddlewares/stripeWebhookContext";
 import { addToExtraLogs } from "@/utils/logging/addToExtraLogs";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeSubscriptionDeletedContext } from "../handleStripeSubscriptionDeleted/setupStripeSubscriptionDeletedContext";
 import type { StripeSubscriptionUpdatedContext } from "../handleStripeSubscriptionUpdated/stripeSubscriptionUpdatedContext";
 
@@ -60,6 +61,22 @@ export const logCustomerProductUpdates = ({
 		oneOffPrepaidCarryOvers.length === 0
 	)
 		return;
+
+	setRootSpanAttributes({
+		"stripe.webhook.plan_id":
+			[
+				...new Set(
+					[...updates, ...deletions, ...insertions].map(
+						({ productId }) => productId,
+					),
+				),
+			]
+				.slice(0, 10)
+				.join(",") || undefined,
+		"stripe.webhook.customer_products_updated": updates.length,
+		"stripe.webhook.customer_products_deleted": deletions.length,
+		"stripe.webhook.customer_products_inserted": insertions.length,
+	});
 
 	addToExtraLogs({
 		ctx,

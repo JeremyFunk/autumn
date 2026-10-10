@@ -10,6 +10,7 @@ import { getOrCreateStripeCustomer } from "@/external/stripe/customers";
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { toSuccessUrl } from "@/internal/orgs/orgUtils/convertOrgUtils.js";
 import RecaseError from "@/utils/errorUtils.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { getOrCreateCustomer } from "../../customers/cusUtils/getOrCreateCustomer.js";
 
 export const handleSetupPayment = createRoute({
@@ -22,6 +23,11 @@ export const handleSetupPayment = createRoute({
 
 		const { customer_id, customer_data, success_url, checkout_session_params } =
 			c.req.valid("json");
+
+		setRootSpanAttributes({
+			"billing.action": "setup_payment",
+			"billing.legacy": true,
+		});
 
 		const customer = await getOrCreateCustomer({
 			ctx,

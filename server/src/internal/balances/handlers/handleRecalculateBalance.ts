@@ -4,6 +4,7 @@ import {
 	Scopes,
 } from "@autumn/shared";
 import { createRoute } from "@/honoMiddlewares/routeHandler";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { recalculateBalance } from "../recalculateBalance/recalculateBalance";
 
 export const handleRecalculateBalance = createRoute({
@@ -13,6 +14,11 @@ export const handleRecalculateBalance = createRoute({
 	handler: async (c) => {
 		const ctx = c.get("ctx");
 		const params = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"balance.action": "recalculate",
+			"balance.feature_id": params.feature_id,
+		});
 
 		await recalculateBalance({
 			ctx,

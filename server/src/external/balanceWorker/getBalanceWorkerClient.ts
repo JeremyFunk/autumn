@@ -16,6 +16,8 @@ import {
 	BALANCE_WORKER_ROUTE_REFRESH_TIMEOUT_MS,
 } from "@autumn/env/balanceWorkerConstants";
 import { logger } from "@/external/logtail/logtailUtils.js";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import { readBalanceWorkerKafkaConfig } from "./balanceWorkerKafkaConfig.js";
 import { getBalanceWorkerRolloutOverride } from "./getBalanceWorkerRolloutEnabled.js";
 
@@ -74,9 +76,44 @@ function createClientForTransport(): BalanceWorkerClient {
 	});
 }
 
+/** A client span around each direct command; queued commands and catalog invalidations pass through as they are. */
+function withBalanceWorkerSpans(
+	client: BalanceWorkerClient,
+): BalanceWorkerClient {
+	if (!isMapleEnabled) return client;
+	const traced =
+		<P, R>(method: string, call: (params: P) => Promise<R>) =>
+		(params: P) =>
+			withDependencySpan({
+				name: `balance_worker.${method}`,
+				attributes: {
+					"rpc.system": "http",
+					"rpc.service": "balance-worker",
+					"rpc.method": method,
+				},
+				fn: () => call(params),
+			});
+	return {
+		...client,
+		track: traced("track", client.track),
+		check: traced("check", client.check),
+		readSubjectState: traced("readSubjectState", client.readSubjectState),
+		initialize: traced("initialize", client.initialize),
+		applyBillingPlan: traced("applyBillingPlan", client.applyBillingPlan),
+		evict: traced("evict", client.evict),
+		flush: traced("flush", client.flush),
+		finalize: traced("finalize", client.finalize),
+		confirmExpiredLock: traced("confirmExpiredLock", client.confirmExpiredLock),
+		reset: traced("reset", client.reset),
+		updateBalance: traced("updateBalance", client.updateBalance),
+		deleteBalance: traced("deleteBalance", client.deleteBalance),
+		recalculateBalance: traced("recalculateBalance", client.recalculateBalance),
+	};
+}
+
 /** Routing answers "no owner" until `startBalanceWorkerClient` has read the ownership log through. */
 export function getBalanceWorkerClient(): BalanceWorkerClient {
-	balanceWorkerClient ??= createClientForTransport();
+	balanceWorkerClient ??= withBalanceWorkerSpans(createClientForTransport());
 	return balanceWorkerClient;
 }
 

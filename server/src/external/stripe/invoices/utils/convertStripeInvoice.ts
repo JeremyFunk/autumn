@@ -8,6 +8,16 @@ export const stripeInvoiceToStripeSubscriptionId = (
 	return subId as string | undefined;
 };
 
+/** An invoice's id, status and total (in the currency's minor unit), as span attributes. */
+export const stripeInvoiceToSpanAttributes = (
+	stripeInvoice: Stripe.Invoice | undefined,
+) => ({
+	"stripe.invoice_id": stripeInvoice?.id,
+	"stripe.invoice_status": stripeInvoice?.status ?? undefined,
+	"stripe.invoice_amount": stripeInvoice?.total,
+	"stripe.invoice_currency": stripeInvoice?.currency,
+});
+
 /**
  * Finds the payment intent from a specific invoice.
  */

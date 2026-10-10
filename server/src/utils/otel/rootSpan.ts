@@ -6,6 +6,8 @@ import {
 	type Span,
 } from "@opentelemetry/api";
 
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
+
 const ROOT_SPAN_CONTEXT_KEY = createContextKey("autumn.root_span");
 
 /**
@@ -41,6 +43,7 @@ export const getRootSpan = (
 export const setRootSpanAttributes = (
 	attrs: Attributes | (() => Attributes),
 ) => {
+	if (!isMapleEnabled) return;
 	try {
 		const span = getRootSpan();
 		if (!span) return;

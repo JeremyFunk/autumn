@@ -11,6 +11,7 @@ import { resolveVercelInstallationId } from "@/external/vercel/misc/vercelInvoic
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { CusService } from "@/internal/customers/CusService.js";
 import { InvoiceService } from "@/internal/invoices/InvoiceService.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	calculateRefundAmountInCents,
 	createRefundAndUpdateInvoice,
@@ -39,6 +40,13 @@ export const handleRefundInvoice = createRoute({
 		const ctx = c.get("ctx");
 		const { customer_id, stripe_invoice_id } = c.req.param();
 		const { mode, amount, reason } = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"billing.action": "refund",
+			"stripe.invoice_id": stripe_invoice_id,
+			"billing.refund.mode": mode,
+			"billing.refund.requested_amount": amount,
+		});
 
 		const stripeCli = createStripeCli({ org: ctx.org, env: ctx.env });
 
@@ -104,6 +112,11 @@ export const handleRefundInvoice = createRoute({
 				testOptions: ctx.testOptions,
 			});
 
+			setRootSpanAttributes({
+				"billing.refund.processor": "vercel",
+				"billing.refund.amount": refundAmount,
+			});
+
 			return c.json({
 				processor: "vercel",
 				vercel_invoice_id: vercelInvoiceId,
@@ -143,6 +156,13 @@ export const handleRefundInvoice = createRoute({
 			chargeId: charge.id,
 			stripeInvoiceId: stripe_invoice_id,
 			amountInCents: refundAmountInCents,
+		});
+
+		setRootSpanAttributes({
+			"billing.refund.processor": "stripe",
+			"stripe.refund_id": stripeRefund.id,
+			"stripe.refund_amount": stripeRefund.amount,
+			"stripe.refund_status": stripeRefund.status ?? undefined,
 		});
 
 		return c.json({

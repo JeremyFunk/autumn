@@ -1,4 +1,5 @@
 import { resolveDeployment } from "@autumn/logging";
+import { ROOT_CONTEXT, TraceFlags, trace } from "@opentelemetry/api";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { logs, resources } from "@opentelemetry/sdk-node";
 import type pino from "pino";
@@ -21,7 +22,7 @@ type Compression = NonNullable<
 
 /** Nested objects become JSON strings so a large `extras` costs one stringify, not an attribute walk. */
 export const toMapleLogRecord = (record: PinoLogLine) => {
-	const { msg, level, time, ...attributes } = record;
+	const { msg, level, time, trace_id, span_id, ...attributes } = record;
 	for (const key in attributes) {
 		if (typeof attributes[key] === "object" && attributes[key] !== null) {
 			attributes[key] = JSON.stringify(attributes[key]);
@@ -33,6 +34,16 @@ export const toMapleLogRecord = (record: PinoLogLine) => {
 		severityNumber: level === undefined ? undefined : SEVERITY_NUMBERS[level],
 		timestamp: time,
 		attributes: attributes as Record<string, string | number | boolean | null>,
+		// A slimmed line names the span it was logged under, so Maple shows it there.
+		...(typeof trace_id === "string" && typeof span_id === "string"
+			? {
+					context: trace.setSpanContext(ROOT_CONTEXT, {
+						traceId: trace_id,
+						spanId: span_id,
+						traceFlags: TraceFlags.SAMPLED,
+					}),
+				}
+			: {}),
 	};
 };
 

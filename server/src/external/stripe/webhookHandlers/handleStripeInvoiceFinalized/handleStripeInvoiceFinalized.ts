@@ -1,6 +1,8 @@
 import type Stripe from "stripe";
+import { stripeInvoiceToSpanAttributes } from "@/external/stripe/invoices/utils/convertStripeInvoice.js";
 import { storeRenewalLineItems } from "@/external/stripe/webhookHandlers/common";
 import { invoiceActions } from "@/internal/invoices/actions";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext";
 import { setupInvoiceFinalizedContext } from "./setupInvoiceFinalizedContext";
 import { enablePendingPlanOnFinalize } from "./tasks/enablePendingPlanOnFinalize";
@@ -25,8 +27,14 @@ export const handleStripeInvoiceFinalized = async ({
 
 	if (!eventContext) {
 		ctx.logger.debug("[invoice.finalized] Skipping - context not found");
+		setRootSpanAttributes({ "stripe.webhook.outcome": "skipped_no_context" });
 		return;
 	}
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "invoice_finalized",
+		...stripeInvoiceToSpanAttributes(eventContext.stripeInvoice),
+	});
 
 	ctx.logger.info(
 		`[invoice.finalized] Processing for invoice ${eventContext.stripeInvoice.id}`,

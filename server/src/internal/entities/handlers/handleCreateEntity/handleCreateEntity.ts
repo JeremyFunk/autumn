@@ -7,6 +7,7 @@ import {
 	Scopes,
 } from "@autumn/shared";
 import { z } from "zod/v4";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { createRoute } from "../../../../honoMiddlewares/routeHandler.js";
 import { entityActions } from "../../actions/index.js";
 
@@ -23,6 +24,16 @@ export const handleCreateEntity = createRoute({
 
 		const { customer_id } = c.req.param();
 		const { with_autumn_id } = c.req.valid("query");
+
+		setRootSpanAttributes(() => {
+			const entities = Array.isArray(body) ? body : [body];
+			return {
+				"entity.action": "create",
+				"entity.count": entities.length,
+				"entity.id": entities[0]?.id ?? undefined,
+				"entity.feature_id": entities[0]?.feature_id,
+			};
+		});
 
 		let customerData: CustomerData | undefined;
 		if (Array.isArray(body)) {

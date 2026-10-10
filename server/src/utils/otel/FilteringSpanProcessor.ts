@@ -72,9 +72,7 @@ const shouldDropSuccessfulRedisSpan = (
 
 	const spanContext = span.spanContext();
 	const sampleKey = `${spanContext.traceId}:${spanContext.spanId}:${span.name}`;
-	return (
-		hashStringToUnitInterval(sampleKey) >= sampleRate
-	);
+	return hashStringToUnitInterval(sampleKey) >= sampleRate;
 };
 
 export class FilteringSpanProcessor implements SpanProcessor {

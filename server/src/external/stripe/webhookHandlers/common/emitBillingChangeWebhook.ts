@@ -9,6 +9,7 @@
 
 import type { StripeWebhookContext } from "@/external/stripe/webhookMiddlewares/stripeWebhookContext";
 import { sendBillingUpdatedWebhook } from "@/internal/billing/v2/workflows/sendBillingUpdatedWebhook/sendBillingUpdatedWebhook";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeSubscriptionDeletedContext } from "../handleStripeSubscriptionDeleted/setupStripeSubscriptionDeletedContext";
 import type { StripeSubscriptionUpdatedContext } from "../handleStripeSubscriptionUpdated/stripeSubscriptionUpdatedContext";
 import { eventContextToAutumnBillingPlan } from "./eventContextToAutumnBillingPlan";
@@ -26,6 +27,7 @@ export const emitBillingChangeWebhook = ({
 }): void => {
 	const autumnBillingPlan = eventContextToAutumnBillingPlan(eventContext);
 	const tags = Array.from(eventContext.billingChangeTags);
+	setRootSpanAttributes({ "stripe.webhook.tags": tags.join(",") || undefined });
 
 	void sendBillingUpdatedWebhook({
 		ctx,

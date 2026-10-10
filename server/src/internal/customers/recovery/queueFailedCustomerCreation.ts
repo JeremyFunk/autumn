@@ -2,9 +2,12 @@ import type { BillingDetailsParams } from "@autumn/shared";
 import {
 	creationRecoveryGroupId,
 	customerCreationRecoveryDedupeId,
+	customerCreationRecoveryJob,
 } from "@autumn/sqs";
+import { SpanKind } from "@opentelemetry/api";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
 import { getSqsJobs } from "@/queue/getSqsJobs.js";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import type {
 	CustomerCreationRecoveryParams,
 	CustomerCreationRecoveryPayload,
@@ -40,13 +43,21 @@ export const queueFailedCustomerCreation = async ({
 		failureStage,
 		failedAt: Date.now(),
 	};
-	const { sent } = await getSqsJobs().customerCreationRecovery.trySend(
-		payload,
-		{
-			groupId: creationRecoveryGroupId(payload),
-			dedupeId: customerCreationRecoveryDedupeId({ payload }),
+	const { sent } = await withDependencySpan({
+		name: "sqs.send",
+		kind: SpanKind.PRODUCER,
+		attributes: {
+			"messaging.system": "aws_sqs",
+			"messaging.operation.type": "send",
+			"messaging.destination.name": customerCreationRecoveryJob.queue,
+			"autumn.job_name": customerCreationRecoveryJob.name,
 		},
-	);
+		fn: () =>
+			getSqsJobs().customerCreationRecovery.trySend(payload, {
+				groupId: creationRecoveryGroupId(payload),
+				dedupeId: customerCreationRecoveryDedupeId({ payload }),
+			}),
+	});
 	if (!sent) return false;
 	ctx.extraLogs.customerCreationRecoveryQueued = { failureStage };
 	return true;

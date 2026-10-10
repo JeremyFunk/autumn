@@ -5,6 +5,7 @@ import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { customerActions } from "@/internal/customers/actions/index.js";
 import { CusService } from "@/internal/customers/CusService.js";
 import { logCaughtError } from "@/utils/logging/logCaughtError.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	AuthError,
 	getAuthorizationToken,
@@ -21,6 +22,12 @@ export const handleUpsertInstallation = createRoute({
 		const ctx = c.get("ctx");
 		const { integrationConfigurationId } = c.req.param();
 		const { logger, testOptions } = ctx;
+
+		setRootSpanAttributes({
+			"vercel.action": "installation.upsert",
+			"vercel.installation_id": integrationConfigurationId,
+		});
+
 		let createdCustomer: Customer | null = null;
 
 		try {

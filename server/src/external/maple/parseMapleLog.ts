@@ -1,4 +1,6 @@
 const STRIPE_WEBHOOK_MARKER = '"stripe_event":{';
+// A line slimmed for a trace that goes to Maple: it belongs beside that trace.
+const TRACE_ID_MARKER = '"trace_id":"';
 // Every billing route is a POST.
 const BILLING_ROUTE_PREFIX = "POST /v1/";
 const BILLING_ROUTE_MARKER = `"name":"${BILLING_ROUTE_PREFIX}`;
@@ -30,6 +32,7 @@ const startsWithBillingPath = (text: string, pathStart: number) => {
 /** Substring scan that never misses a Maple line; request data can forge a hit, so hits are confirmed after parsing. */
 const mightBeMapleLog = (line: string) => {
 	if (line.includes(STRIPE_WEBHOOK_MARKER)) return true;
+	if (line.includes(TRACE_ID_MARKER)) return true;
 
 	let markerIndex = line.indexOf(BILLING_ROUTE_MARKER);
 	while (markerIndex !== -1) {
@@ -40,12 +43,14 @@ const mightBeMapleLog = (line: string) => {
 	return false;
 };
 
-/** Returns the parsed line for billing requests (top-level `req.name`) and Stripe webhooks; other lines are never parsed. */
+/** Returns the parsed line for billing requests (top-level `req.name`), Stripe webhooks and lines of a traced request; other lines are never parsed. */
 export const parseMapleLog = (line: string): PinoLogLine | null => {
 	if (!mightBeMapleLog(line)) return null;
 
 	const record: PinoLogLine = JSON.parse(line);
 	if (record.stripe_event) return record;
+	if (typeof record.trace_id === "string" && typeof record.span_id === "string")
+		return record;
 
 	const name = record.req?.name;
 	if (typeof name !== "string" || !name.startsWith(BILLING_ROUTE_PREFIX)) {

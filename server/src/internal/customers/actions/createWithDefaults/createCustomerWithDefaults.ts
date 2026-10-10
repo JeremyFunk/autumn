@@ -4,6 +4,7 @@ import { sendBillingUpdatedWebhook } from "@/internal/billing/v2/workflows/sendB
 import { billingPlanToSendProductsUpdated } from "@/internal/billing/v2/workflows/sendProductsUpdated/billingPlanToSendProductsUpdated.js";
 import { linkStripeCustomer } from "@/internal/customers/actions/linkStripeCustomer.js";
 import { setCustomerCreationRecoveryStage } from "@/internal/customers/recovery/customerCreationRecoveryStage.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { computeCreateCustomerPlan } from "./compute/computeCreateCustomerPlan.js";
 import { executeAutumnCreateCustomerPlan } from "./execute/executeAutumnCreateCustomerPlan.js";
 import {
@@ -61,9 +62,21 @@ export const createCustomerWithDefaults = async ({
 	logAutumnPlanResult({ ctx, result: autumnResult });
 
 	if (autumnResult.type === "existing") {
+		setRootSpanAttributes({ "customer.created": false });
 		setCustomerCreationRecoveryStage({ ctx, stage: "completed" });
 		return context.fullCustomer;
 	}
+
+	// A creation sets `maple.keep`, so a sampled trace of it is never dropped.
+	setRootSpanAttributes(() => ({
+		"customer.created": true,
+		"customer.default_plan_ids":
+			autumnBillingPlan.insertCustomerProducts
+				.map((customerProduct) => customerProduct.product.id)
+				.slice(0, 10)
+				.join(",") || undefined,
+		"maple.keep": true,
+	}));
 
 	// ============ Phase 2: Link stripe customer ============
 

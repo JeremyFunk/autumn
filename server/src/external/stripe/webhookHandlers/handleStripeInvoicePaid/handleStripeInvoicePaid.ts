@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { stripeInvoiceToSpanAttributes } from "@/external/stripe/invoices/utils/convertStripeInvoice.js";
 import { upsertAutumnInvoice } from "@/external/stripe/webhookHandlers/common/upsertAutumnInvoice";
 import { convertToChargeAutomatically } from "@/external/stripe/webhookHandlers/handleStripeInvoicePaid/tasks/convertToChargeAutomatically.js";
 import { queueCheckoutRewardTasks } from "@/external/stripe/webhookHandlers/handleStripeInvoicePaid/tasks/queueCheckoutRewardTasks.js";
@@ -6,6 +7,7 @@ import { sendEmailReceipt } from "@/external/stripe/webhookHandlers/handleStripe
 import { autoTopupLimitRepo } from "@/internal/balances/autoTopUp/repos";
 import { clearThresholdPastDue } from "@/internal/balances/thresholdBilling/clearThresholdPastDue.js";
 import { AUTUMN_ACTION_CUSTOMER_PRODUCT_METADATA_KEY } from "@/internal/billing/v2/providers/stripe/utils/invoices/billingInvoiceMetadataKeys.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext.js";
 import { setupStripeInvoicePaidContext } from "./setupStripeInvoicePaidContext.js";
 import { handleStripeInvoiceDiscounts } from "./tasks/handleStripeInvoiceDiscounts.js";
@@ -27,6 +29,12 @@ export const handleStripeInvoicePaid = async ({
 		ctx.logger.warn("[invoice.paid] invoicePaidContext not found, skipping");
 		return;
 	}
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "invoice_paid",
+		...stripeInvoiceToSpanAttributes(invoicePaidContext.stripeInvoice),
+		"stripe.subscription_id": invoicePaidContext.stripeSubscriptionId,
+	});
 
 	const isThresholdBillingInvoice =
 		invoicePaidContext.stripeInvoice.metadata?.autumn_action_source ===

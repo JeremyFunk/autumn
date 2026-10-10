@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { isUniqueConstraintError } from "@/db/dbUtils.js";
 import { VercelResourceService } from "@/external/vercel/services/VercelResourceService.js";
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 /**
  * PATCH /v1/installations/{integrationConfigurationId}/resources/{resourceId}
@@ -40,6 +41,13 @@ export const handleUpdateResource = createRoute({
 		const { orgId, env, integrationConfigurationId, resourceId } =
 			c.req.param();
 		const ctx = c.get("ctx");
+
+		setRootSpanAttributes({
+			"vercel.action": "resource.update",
+			"vercel.installation_id": integrationConfigurationId,
+			"vercel.resource_id": resourceId,
+		});
+
 		const { db, fullCustomer: customer } = ctx;
 		const body = c.req.valid("json");
 

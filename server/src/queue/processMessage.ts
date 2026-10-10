@@ -11,6 +11,7 @@ import {
 	isLogReplacedByMapleTrace,
 	markJobTraceForMaple,
 } from "@/external/maple/mapleTraceScope.js";
+import { setMapleExtrasSpanAttribute } from "@/external/maple/setMapleExtrasSpanAttribute.js";
 import { isTransientRedisError } from "@/external/redis/utils/isTransientRedisError.js";
 import {
 	runStripeWebhookReplay,
@@ -47,6 +48,7 @@ import { runTriggerCheckoutReward } from "@/internal/rewards/actions/triggerChec
 import { generateId } from "@/utils/genUtils.js";
 import { addWorkflowToLogs } from "@/utils/logging/addContextToLogs.js";
 import { logContextExtras } from "@/utils/logging/logContextExtras.js";
+import { parseTraceparent } from "@/utils/otel/traceparent.js";
 import { withWorkerSpan } from "@/utils/otel/withWorkerSpan.js";
 import { createWorkerContext } from "./createWorkerContext.js";
 import { JobName } from "./JobName.js";
@@ -502,16 +504,24 @@ export const processMessage = async ({
 				}),
 			},
 			traceparent: job.traceparent,
-			fn: () => {
+			fn: async () => {
+				const span = trace.getActiveSpan();
 				markJobTraceForMaple({
 					jobName: job.name,
-					isContinued: Boolean(job.traceparent),
+					isContinued:
+						parseTraceparent({ traceparent: job.traceparent }) !== undefined,
 				});
 				isLogReplaced = isLogReplacedByMapleTrace({
-					traceId: trace.getActiveSpan()?.spanContext().traceId,
+					traceId: span?.spanContext().traceId,
 					failed: false,
 				});
-				return executeJob();
+				try {
+					return await executeJob();
+				} finally {
+					// The job span is still open here; the "Finished" line it replaces is logged after it ends.
+					if (isLogReplaced)
+						setMapleExtrasSpanAttribute({ extraLogs: workerCtx?.extraLogs });
+				}
 			},
 		});
 	} catch (error) {

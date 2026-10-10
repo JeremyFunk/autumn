@@ -5,6 +5,7 @@ import { initDrizzle } from "../db/initDrizzle.js";
 import { startPgPoolMonitor, stopPgPoolMonitor } from "../db/pgPoolMonitor.js";
 import { runDbProbes } from "../db/probes/runDbProbes.js";
 import { logger } from "../external/logtail/logtailUtils.js";
+import { markJobTraceForMaple } from "../external/maple/mapleTraceScope.js";
 import { refreshCeBalancesCache } from "../external/motherduck/refreshCeBalancesCache.js";
 import { runResetLoopV2 } from "../internal/balances/batchReset/runResetLoopV2.js";
 import { runLockSweepLoop } from "../internal/balances/lockSweep/runLockSweepLoop.js";
@@ -20,6 +21,8 @@ import {
 } from "../queue/blueGreen/blueGreenHeartbeat.js";
 import { stopBlueGreenSlotStorePolling } from "../queue/blueGreen/blueGreenSlotStore.js";
 import { shutdownSqsSendBatchers } from "../queue/queueUtils.js";
+import { generateId } from "../utils/genUtils.js";
+import { withWorkerSpan } from "../utils/otel/withWorkerSpan.js";
 import { runExpiredGrantCleanup } from "./grantCron/runExpiredGrantCleanup.js";
 import { runInvoiceCron } from "./invoiceCron/runInvoiceCron.js";
 import { runLongLivedCheckoutExpiry } from "./longLivedCheckoutCron/runLongLivedCheckoutExpiry";
@@ -77,16 +80,39 @@ const shouldRunTick = () => {
 	return true;
 };
 
+/** One root span per job run; a throw still reaches the tick, as it did before. */
+const runCronJob = <T>({
+	jobName,
+	fn,
+}: {
+	jobName: string;
+	fn: () => Promise<T>;
+}) =>
+	withWorkerSpan({
+		workflowName: `cron.${jobName}`,
+		workflowId: generateId("cron"),
+		fn: () => {
+			markJobTraceForMaple({ jobName: `cron.${jobName}`, isContinued: false });
+			return fn();
+		},
+	});
+
 const main = async () => {
 	if (!shouldRunTick()) return;
 
 	logCronHeartbeat();
 
 	await Promise.all([
-		runProductCron({ ctx }),
-		runInvoiceCron({ ctx }),
-		runOneOffExpiry({ ctx }),
-		runLongLivedCheckoutExpiry({ ctx }),
+		runCronJob({ jobName: "product", fn: () => runProductCron({ ctx }) }),
+		runCronJob({ jobName: "invoice", fn: () => runInvoiceCron({ ctx }) }),
+		runCronJob({
+			jobName: "one_off_expiry",
+			fn: () => runOneOffExpiry({ ctx }),
+		}),
+		runCronJob({
+			jobName: "long_lived_checkout_expiry",
+			fn: () => runLongLivedCheckoutExpiry({ ctx }),
+		}),
 	]);
 };
 
@@ -98,9 +124,15 @@ const oneOffCleanupTick = async () => {
 	logCronHeartbeat("one_off_cleanup");
 
 	await Promise.all([
-		runOneOffCleanup({ ctx }),
-		runSeatSyncCron({ ctx }),
-		runExpiredGrantCleanup({ ctx }),
+		runCronJob({
+			jobName: "one_off_cleanup",
+			fn: () => runOneOffCleanup({ ctx }),
+		}),
+		runCronJob({ jobName: "seat_sync", fn: () => runSeatSyncCron({ ctx }) }),
+		runCronJob({
+			jobName: "expired_grant_cleanup",
+			fn: () => runExpiredGrantCleanup({ ctx }),
+		}),
 	]);
 };
 
@@ -108,7 +140,10 @@ const oneOffCleanupTick = async () => {
 // billing cron can't delay detection. Slot-gated like the other jobs.
 const dbProbesTick = async () => {
 	if (!shouldRunTick()) return;
-	await runDbProbes({ db: probeDb });
+	await runCronJob({
+		jobName: "db_probes",
+		fn: () => runDbProbes({ db: probeDb }),
+	});
 };
 
 // On by default wherever the RW token exists; the miscellaneous edge config
@@ -119,7 +154,10 @@ const mdCacheRefreshTick = async () => {
 	if (isMotherduckCacheRefreshDisabled()) return;
 
 	logCronHeartbeat("md_cache_refresh");
-	await refreshCeBalancesCache({ logger });
+	await runCronJob({
+		jobName: "md_cache_refresh",
+		fn: () => refreshCeBalancesCache({ logger }),
+	});
 };
 
 new CronJob(

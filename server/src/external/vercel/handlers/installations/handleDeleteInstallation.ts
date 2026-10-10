@@ -4,6 +4,7 @@ import { VercelResourceService } from "@/external/vercel/services/VercelResource
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { customerActions } from "@/internal/customers/actions/index.js";
 import { logCaughtError } from "@/utils/logging/logCaughtError.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	type VercelResourceDeletedEvent,
 	VercelWebhooks,
@@ -15,6 +16,11 @@ export const handleDeleteInstallation = createRoute({
 		const ctx = c.get("ctx");
 		const { integrationConfigurationId, orgId } = c.req.param();
 		const { db, org, logger, fullCustomer: customer } = ctx;
+
+		setRootSpanAttributes({
+			"vercel.action": "installation.delete",
+			"vercel.installation_id": integrationConfigurationId,
+		});
 
 		try {
 			const resources = await VercelResourceService.listByInstallation({

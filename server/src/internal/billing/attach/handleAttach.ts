@@ -6,6 +6,7 @@ import {
 } from "../../../../../shared/api/versionUtils/versionUtils";
 import { createRoute } from "../../../honoMiddlewares/routeHandler";
 import { buildBillingLockKey } from "@/internal/billing/v2/utils/billingLock/buildBillingLockKey";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { checkStripeConnections } from "../../customers/attach/attachRouter";
 import { getAttachParams } from "../../customers/attach/attachUtils/attachParams/getAttachParams";
 import { getAttachBranch } from "../../customers/attach/attachUtils/getAttachBranch";
@@ -57,6 +58,16 @@ export const handleAttach = createRoute({
 		});
 
 		attachParams.branch = branch; // important!
+
+		setRootSpanAttributes(() => ({
+			"billing.action": "attach",
+			"billing.legacy": true,
+			"billing.plan_id": attachParams.products
+				.map((p) => p.id)
+				.slice(0, 10)
+				.join(","),
+			"billing.attach_branch": branch,
+		}));
 
 		const { flags, config } = await getAttachConfig({
 			ctx,
@@ -114,6 +125,13 @@ export const handleAttach = createRoute({
 			attachBody,
 			config,
 		});
+
+		setRootSpanAttributes(() => ({
+			"billing.checkout": Boolean(response.checkout_url),
+			"billing.result_code": response.code,
+			"stripe.invoice_id": response.invoice?.id,
+			"stripe.subscription_id": response.stripeSub?.id,
+		}));
 
 		const { products, customer } = attachParams;
 

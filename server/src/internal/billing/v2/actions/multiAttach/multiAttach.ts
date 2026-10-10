@@ -19,6 +19,7 @@ import { logStripeBillingResult } from "@/internal/billing/v2/providers/stripe/l
 import { computeAttachPreviewBillingPlan } from "@/internal/billing/v2/utils/billingPlan/preview/computeAttachPreviewBillingPlan";
 import { logAutumnBillingPlan } from "@/internal/billing/v2/utils/logs/logAutumnBillingPlan";
 import { hashJson } from "@/utils/hash/hashJson";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { computeMultiAttachPlan } from "./compute/computeMultiAttachPlan";
 import { handleMultiAttachCurrencyErrors } from "./errors/handleMultiAttachCurrencyErrors";
 import {
@@ -44,6 +45,15 @@ export async function multiAttach({
 	params: MultiAttachParamsV0;
 	preview?: boolean;
 }): Promise<MultiAttachResult> {
+	setRootSpanAttributes(() => ({
+		"billing.action": "multi_attach",
+		"billing.plan_ids": params.plans
+			.map((plan) => plan.plan_id)
+			.slice(0, 10)
+			.join(","),
+		"billing.preview": preview || undefined,
+	}));
+
 	const checkoutReservation = !preview
 		? await checkoutSessionLock.get({ ctx, customerId: params.customer_id })
 		: undefined;

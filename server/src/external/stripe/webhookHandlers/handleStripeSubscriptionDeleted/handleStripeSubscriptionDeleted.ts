@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext";
 import { emitBillingChangeWebhook, logCustomerProductUpdates } from "../common";
 import { setupStripeSubscriptionDeletedContext } from "./setupStripeSubscriptionDeletedContext";
@@ -29,8 +30,14 @@ export const handleStripeSubscriptionDeleted = async ({
 
 	if (!eventContext) {
 		logger.debug("[sub.deleted] Skipping - context not found or locked");
+		setRootSpanAttributes({ "stripe.webhook.outcome": "skipped_no_context" });
 		return;
 	}
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "subscription_deleted",
+		"stripe.subscription_id": eventContext.stripeSubscription.id,
+	});
 
 	logger.info(`[sub.deleted] Processing subscription.deleted`);
 

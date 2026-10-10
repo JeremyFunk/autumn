@@ -7,6 +7,7 @@ import { billingActions } from "@/internal/billing/v2/actions";
 import { createScheduleParamsToSetPlansParams } from "@/internal/billing/v2/actions/setPlans/utils/createScheduleParamsToSetPlansParams";
 import { setPlansResultToResponse } from "@/internal/billing/v2/actions/setPlans/utils/setPlansResultToResponse";
 import { buildBillingLockKey } from "@/internal/billing/v2/utils/billingLock/buildBillingLockKey";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { createRoute } from "../../../../honoMiddlewares/routeHandler";
 
 /** Handle the internal create-schedule RPC route. */
@@ -40,6 +41,9 @@ export const handleCreateSchedule = createRoute({
 				}),
 			}),
 		}) satisfies CreateScheduleResponse;
+
+		// After setPlans, which stamps its own action on the same span.
+		setRootSpanAttributes({ "billing.action": "create_schedule" });
 
 		return c.json(response, 200);
 	},

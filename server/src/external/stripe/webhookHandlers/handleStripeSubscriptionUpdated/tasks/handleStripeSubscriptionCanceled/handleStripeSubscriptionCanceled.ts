@@ -9,6 +9,7 @@ import { isAutumnOriginatedStripeEvent } from "@/external/stripe/common/autumnSt
 import type { StripeWebhookContext } from "@/external/stripe/webhookMiddlewares/stripeWebhookContext";
 import { addProductsUpdatedWebhookTask } from "@/internal/analytics/handlers/handleProductsUpdated";
 import { CusProductService } from "@/internal/customers/cusProducts/CusProductService";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { trackCustomerProductUpdate } from "../../../common/trackCustomerProductUpdate";
 import type { StripeSubscriptionUpdatedContext } from "../../stripeSubscriptionUpdatedContext";
 import { isStripeSubscriptionCanceledEvent } from "./isStripeSubscriptionCanceledEvent";
@@ -106,6 +107,12 @@ export const handleStripeSubscriptionCanceled = async ({
 		if (!customerProduct.product.is_add_on) {
 			canceledNonAddonProducts.push(customerProduct);
 		}
+	}
+
+	if (allCanceledProducts.length > 0) {
+		setRootSpanAttributes({
+			"stripe.webhook.outcome": "subscription_canceled",
+		});
 	}
 
 	// PASS 2: Schedule default products

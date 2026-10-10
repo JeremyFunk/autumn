@@ -1,6 +1,26 @@
 import type { AppEnv, Organization } from "@autumn/shared";
+import { SpanKind } from "@opentelemetry/api";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import { getSvixAppId, getSvixClient, safeSvix } from "./svixUtils.js";
+
+const withSvixSendSpan = <T>({
+	eventType,
+	fn,
+}: {
+	eventType: string;
+	fn: () => Promise<T>;
+}) =>
+	withDependencySpan({
+		name: "svix.send",
+		kind: SpanKind.PRODUCER,
+		attributes: {
+			"messaging.system": "svix",
+			"messaging.destination.name": eventType,
+			"server.address": "api.svix.com",
+		},
+		fn,
+	});
 
 export const createSvixApp = safeSvix({
 	fn: async ({
@@ -60,9 +80,13 @@ export const sendSvixEvent = async ({
 			return null;
 		}
 
-		return await svix.sendMessage({
-			appId,
-			message: { eventType, data, payloadFields, idempotencyKey, tags },
+		return await withSvixSendSpan({
+			eventType,
+			fn: () =>
+				svix.sendMessage({
+					appId,
+					message: { eventType, data, payloadFields, idempotencyKey, tags },
+				}),
 		});
 	} catch (error) {
 		// Log the tags (the usual culprit) so tag-validation rejections aren't
@@ -93,9 +117,13 @@ export const sendCustomSvixEvent = safeSvix({
 		appId: string;
 		idempotencyKey?: string;
 	}) => {
-		return await getSvixClient()?.sendMessage({
-			appId,
-			message: { eventType, data, idempotencyKey },
+		return await withSvixSendSpan({
+			eventType,
+			fn: async () =>
+				getSvixClient()?.sendMessage({
+					appId,
+					message: { eventType, data, idempotencyKey },
+				}),
 		});
 	},
 	action: "sendSvixEvent",

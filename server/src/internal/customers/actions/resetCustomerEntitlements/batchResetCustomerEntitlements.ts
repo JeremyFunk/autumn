@@ -3,6 +3,7 @@ import pLimit from "p-limit";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
 import type { BatchResetCusEntsPayload } from "@/queue/workflows.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { CusService } from "../../CusService.js";
 import { getFullSubject } from "../../repos/getFullSubject/getFullSubject.js";
 
@@ -21,6 +22,8 @@ export const batchResetCustomerEntitlements = async ({
 	payload: BatchResetCusEntsPayload;
 }): Promise<void> => {
 	const { resets } = payload;
+
+	setRootSpanAttributes({ "reset.batch_size": resets.length });
 
 	if (resets.length === 0) return;
 

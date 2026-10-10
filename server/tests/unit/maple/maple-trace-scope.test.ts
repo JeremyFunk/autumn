@@ -20,11 +20,12 @@ import type {
 import {
 	classifyMapleJob,
 	classifyMapleRequest,
+	getMapleTraceMark,
 	isLogReplacedByMapleTrace,
 	type MapleTraceMode,
 	type MapleTraceScope,
 	markTraceForMaple,
-	recordLogAsMapleSpanEvent,
+	slimMapleLogLine,
 } from "@/external/maple/mapleTraceScope.js";
 import { JobName } from "@/queue/JobName.js";
 import { MapleScopedSpanProcessor } from "@/utils/otel/MapleScopedSpanProcessor.js";
@@ -120,7 +121,6 @@ describe("classifyMapleRequest", () => {
 		for (const path of [
 			"/v1/billing.attach",
 			"/v1/checkout",
-			"/v1/billing.preview_attach",
 			"/v1/balances.create",
 			"/v1/balances.update",
 			"/v1/customers",
@@ -129,10 +129,28 @@ describe("classifyMapleRequest", () => {
 			"/v1/invoices.finalize",
 			"/webhooks/connect/live",
 			"/webhooks/revenuecat/org_1/live",
+			"/v1/customers.get_or_create",
+			"/v1/usage",
+			"/v1/customers/list_of_things",
+			"/checkouts/co_1/confirm",
+			"/products/copy_to_production",
 		]) {
 			expect(classify("POST", path)).toBe("keep");
 		}
 		expect(classify("DELETE", "/v1/customers/cus_1")).toBe("keep");
+		expect(classify("PATCH", "/webhooks/vercel/v1/installations/i_1")).toBe(
+			"keep",
+		);
+		expect(classify("GET", "/checkouts/co_1/start")).toBe("keep");
+	});
+
+	test("leaves infrastructure and unauthenticated reads alone", () => {
+		expect(classify("POST", "/balance-worker-proxy", "api")).toBeNull();
+		expect(classify("GET", "/checkouts/co_1", "api")).toBeNull();
+		expect(classify("GET", "/webhooks/vercel/v1/installations/i_1")).toBeNull();
+		expect(
+			classify("POST", "/products/copy_to_production", "billing"),
+		).toBeNull();
 	});
 
 	test("leaves reads and the hot path out unless the scope is api", () => {
@@ -141,6 +159,11 @@ describe("classifyMapleRequest", () => {
 			["POST", "/v1/balances.track"],
 			["POST", "/v1/customers.get"],
 			["POST", "/v1/customers.list"],
+			["POST", "/v1/customers/list"],
+			["POST", "/v1/billing.preview_attach"],
+			["POST", "/v1/attach/preview"],
+			["POST", "/v1/balances.batch_track_tokens"],
+			["POST", "/v1/events.aggregate"],
 			["POST", "/v1/check"],
 			["POST", "/v1/track"],
 			["GET", "/v1/customers/cus_1"],
@@ -181,8 +204,6 @@ describe("classifyMapleJob", () => {
 			JobName.SyncCustomerDirty,
 			JobName.PersistPublishedBalanceTransitions,
 			JobName.RefreshEntityAggregate,
-			JobName.UpdateUsage,
-			JobName.UpdateBalance,
 		]) {
 			expect(classify(jobName, "billing")).toBeNull();
 			expect(classify(jobName)).toBeNull();
@@ -229,18 +250,31 @@ describe("isLogReplacedByMapleTrace", () => {
 	});
 });
 
-describe("recordLogAsMapleSpanEvent", () => {
-	test("leaves the line to the logger when off, not info, or outside a trace", () => {
+describe("markTraceForMaple", () => {
+	test("a kept request joining a sampled trace promotes it and is a root too", () => {
+		const traceId = "c".repeat(32);
+		markTraceForMaple({ traceId, rootSpanId: "a1", mode: "sample" });
+		markTraceForMaple({ traceId, rootSpanId: "b2", mode: "keep" });
+
+		const mark = getMapleTraceMark(traceId);
+		expect(mark?.mode).toBe("keep");
+		expect(mark?.rootSpanId).toBe("a1");
+		expect([...(mark?.rootSpanIds ?? [])]).toEqual(["a1", "b2"]);
+	});
+});
+
+describe("slimMapleLogLine", () => {
+	test("leaves the line alone when off, not info, or outside a trace", () => {
 		const args = ["cache filled"];
-		expect(recordLogAsMapleSpanEvent({ args, level: 30, enabled: false })).toBe(
-			false,
-		);
-		expect(recordLogAsMapleSpanEvent({ args, level: 40, enabled: true })).toBe(
-			false,
-		);
-		expect(recordLogAsMapleSpanEvent({ args, level: 30, enabled: true })).toBe(
-			false,
-		);
+		expect(
+			slimMapleLogLine({ args, level: 30, enabled: false }),
+		).toBeUndefined();
+		expect(
+			slimMapleLogLine({ args, level: 40, enabled: true }),
+		).toBeUndefined();
+		expect(
+			slimMapleLogLine({ args, level: 30, enabled: true }),
+		).toBeUndefined();
 	});
 });
 
@@ -271,6 +305,19 @@ describe("traceparent", () => {
 			traceFlags: 1,
 			isRemote: true,
 		});
+	});
+
+	test("ignores a value that is not a usable parent", () => {
+		for (const traceparent of [
+			42,
+			{ a: 1 },
+			`00-${"0".repeat(32)}-${"1".repeat(16)}-01`,
+			`00-${"a".repeat(32)}-${"0".repeat(16)}-01`,
+		]) {
+			expect(
+				parseTraceparent({ traceparent: traceparent as string }),
+			).toBeUndefined();
+		}
 	});
 
 	test("ignores a missing or malformed header", () => {
@@ -355,6 +402,45 @@ describe("MapleScopedSpanProcessor", () => {
 			});
 			expect(root.attributes).toMatchObject(tenant);
 		}
+	});
+
+	test("a second request under the same trace id keeps its tenant attrs and promotes the trace", () => {
+		const SECOND = "0000000000000009";
+		const tenant = { org_id: "org_1" };
+		const marks = new Map([
+			[
+				TRACE,
+				{
+					mode: "sample" as MapleTraceMode,
+					rootSpanId: ROOT,
+					rootSpanIds: new Set([ROOT, SECOND]),
+				},
+			],
+		]);
+		const delegate = new CapturingSpanProcessor();
+		const processor = new MapleScopedSpanProcessor(delegate, {
+			sampleRate: 0,
+			slowMs: 1000,
+			marks: {
+				get: (traceId) => marks.get(traceId),
+				promote: () => {},
+				unmark: (traceId) => {
+					marks.delete(traceId);
+				},
+			},
+		});
+
+		// A child of the sampled first request waits for its verdict.
+		processor.onEnd(createSpan({ spanId: "0000000000000002" }));
+		expect(delegate.ended).toEqual([]);
+
+		// The second request is a state change: the mark becomes keep.
+		const mark = marks.get(TRACE);
+		if (mark) mark.mode = "keep";
+		processor.onEnd(createSpan({ spanId: SECOND, attributes: tenant }));
+
+		expect(delegate.ended).toEqual(["0000000000000002", SECOND]);
+		expect(delegate.spans[1].attributes).toMatchObject(tenant);
 	});
 
 	test("keeps a healthy sampled trace that falls in the rate", () => {

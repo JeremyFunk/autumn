@@ -18,10 +18,13 @@ export const parseTraceparent = ({
 }: {
 	traceparent?: string;
 }): SpanContext | undefined => {
-	const match = traceparent?.match(TRACEPARENT_PATTERN);
+	// Read from a message body, so nothing about its type is known.
+	if (typeof traceparent !== "string") return undefined;
+	const match = traceparent.match(TRACEPARENT_PATTERN);
 	if (!match) return undefined;
 
 	const [, traceId, spanId, flags] = match;
+	if (/^0+$/.test(traceId) || /^0+$/.test(spanId)) return undefined;
 	return {
 		traceId,
 		spanId,

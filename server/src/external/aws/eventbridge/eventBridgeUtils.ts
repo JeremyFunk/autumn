@@ -5,10 +5,24 @@ import {
 } from "@aws-sdk/client-scheduler";
 import { logger } from "@/external/logtail/logtailUtils.js";
 import { deriveSqsQueueArn } from "@/queue/utils/deriveSqsQueueArn.js";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import { schedulerClient } from "./initEventBridge.js";
 
 const SCHEDULE_GROUP = "default";
 const SCHEDULER_ROLE_ARN = process.env.AWS_EVENTBRIDGE_SCHEDULER_ROLE_ARN || "";
+
+const schedulerSpanAttributes = ({
+	method,
+	scheduleName,
+}: {
+	method: string;
+	scheduleName: string;
+}) => ({
+	"rpc.system": "aws-api",
+	"rpc.service": "EventBridgeScheduler",
+	"rpc.method": method,
+	"aws.eventbridge.schedule_name": scheduleName,
+});
 
 const getSqsQueueArn = (): string =>
 	deriveSqsQueueArn({ queueUrl: process.env.SQS_QUEUE_URL_V2 || "" });
@@ -35,25 +49,33 @@ export const createSchedule = async ({
 		`[EventBridge] Creating schedule: name=${scheduleName} arn=${sqsArn} at=${atExpression}`,
 	);
 
-	await schedulerClient.send(
-		new CreateScheduleCommand({
-			Name: scheduleName,
-			GroupName: SCHEDULE_GROUP,
-			ScheduleExpression: atExpression,
-			ScheduleExpressionTimezone: "UTC",
-			FlexibleTimeWindow: { Mode: "OFF" },
-			Target: {
-				Arn: sqsArn,
-				RoleArn: SCHEDULER_ROLE_ARN,
-				Input: sqsMessageBody,
-				SqsParameters: {
-					MessageGroupId: messageGroupId,
-				},
-			},
-			// Auto-delete after firing so schedules don't accumulate
-			ActionAfterCompletion: "DELETE",
+	await withDependencySpan({
+		name: "eventbridge.create_schedule",
+		attributes: schedulerSpanAttributes({
+			method: "CreateSchedule",
+			scheduleName,
 		}),
-	);
+		fn: () =>
+			schedulerClient.send(
+				new CreateScheduleCommand({
+					Name: scheduleName,
+					GroupName: SCHEDULE_GROUP,
+					ScheduleExpression: atExpression,
+					ScheduleExpressionTimezone: "UTC",
+					FlexibleTimeWindow: { Mode: "OFF" },
+					Target: {
+						Arn: sqsArn,
+						RoleArn: SCHEDULER_ROLE_ARN,
+						Input: sqsMessageBody,
+						SqsParameters: {
+							MessageGroupId: messageGroupId,
+						},
+					},
+					// Auto-delete after firing so schedules don't accumulate
+					ActionAfterCompletion: "DELETE",
+				}),
+			),
+	});
 };
 
 /** Deletes an EventBridge schedule by name. Silently ignores not-found errors. */
@@ -61,16 +83,25 @@ export const deleteSchedule = async ({
 	scheduleName,
 }: {
 	scheduleName: string;
-}) => {
-	try {
-		await schedulerClient.send(
-			new DeleteScheduleCommand({
-				Name: scheduleName,
-				GroupName: SCHEDULE_GROUP,
-			}),
-		);
-	} catch (error) {
-		if (error instanceof ResourceNotFoundException) return;
-		throw error;
-	}
-};
+}) =>
+	// The span wraps the not-found handling, so a schedule that already fired is not an error.
+	withDependencySpan({
+		name: "eventbridge.delete_schedule",
+		attributes: schedulerSpanAttributes({
+			method: "DeleteSchedule",
+			scheduleName,
+		}),
+		fn: async () => {
+			try {
+				await schedulerClient.send(
+					new DeleteScheduleCommand({
+						Name: scheduleName,
+						GroupName: SCHEDULE_GROUP,
+					}),
+				);
+			} catch (error) {
+				if (error instanceof ResourceNotFoundException) return;
+				throw error;
+			}
+		},
+	});

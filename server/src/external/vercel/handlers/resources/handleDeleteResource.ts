@@ -5,6 +5,7 @@ import { sendCustomSvixEvent } from "@/external/svix/svixHelpers.js";
 import { VercelResourceService } from "@/external/vercel/services/VercelResourceService.js";
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { logCaughtError } from "@/utils/logging/logCaughtError.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	type VercelResourceDeletedEvent,
 	VercelWebhooks,
@@ -19,6 +20,13 @@ export const handleDeleteResource = createRoute({
 		const { orgId, env, integrationConfigurationId, resourceId } =
 			c.req.param();
 		const ctx = c.get("ctx");
+
+		setRootSpanAttributes({
+			"vercel.action": "resource.delete",
+			"vercel.installation_id": integrationConfigurationId,
+			"vercel.resource_id": resourceId,
+		});
+
 		const { db, org, logger, fullCustomer: customer } = ctx;
 
 		try {

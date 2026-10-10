@@ -25,6 +25,7 @@ import { customerProductRepo } from "@/internal/customers/cusProducts/repos";
 import { ProductService } from "@/internal/products/ProductService.js";
 import { generateId } from "@/utils/genUtils.js";
 import { logCaughtError } from "@/utils/logging/logCaughtError.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import {
 	type VercelResourceCreatedEvent,
 	VercelWebhooks,
@@ -107,6 +108,12 @@ export const handleCreateResource = createRoute({
 		const { productId, name, metadata, billingPlanId } =
 			c.req.valid("json");
 		const appEnv = env as AppEnv;
+
+		setRootSpanAttributes({
+			"vercel.action": "resource.create",
+			"vercel.installation_id": integrationConfigurationId,
+			"vercel.billing_plan_id": billingPlanId,
+		});
 
 		if (!customer) {
 			throw new RecaseError({

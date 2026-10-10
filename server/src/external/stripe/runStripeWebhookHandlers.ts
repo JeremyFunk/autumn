@@ -1,5 +1,6 @@
 import { handleStripeInvoicePaid } from "@/external/stripe/webhookHandlers/handleStripeInvoicePaid/handleStripeInvoicePaid.js";
 import { handleStripeSubscriptionUpdated } from "@/external/stripe/webhookHandlers/handleStripeSubscriptionUpdated/handleStripeSubscriptionUpdated.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { handleCusDiscountDeleted } from "./webhookHandlers/handleCusDiscountDeleted.js";
 import { handleInvoiceUpdated } from "./webhookHandlers/handleInvoiceUpdated.js";
 import { handleStripeApplicationDeauthorized } from "./webhookHandlers/handleStripeApplicationDeauthorized.js";
@@ -29,6 +30,9 @@ export const runStripeWebhookHandlers = async ({
 	const event = stripeEvent;
 
 	// await throwOnSimulatedWebhookFailure({ ctx });
+
+	// Stands unless the event type has no handler below.
+	setRootSpanAttributes({ "stripe.webhook.handled": true });
 
 	switch (event.type) {
 		case "account.application.deauthorized":
@@ -112,6 +116,7 @@ export const runStripeWebhookHandlers = async ({
 		}
 
 		default:
+			setRootSpanAttributes({ "stripe.webhook.handled": false });
 			break;
 	}
 };

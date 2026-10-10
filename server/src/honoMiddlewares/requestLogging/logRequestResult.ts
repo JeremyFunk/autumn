@@ -2,6 +2,7 @@ import { trace } from "@opentelemetry/api";
 import chalk from "chalk";
 import type { Context } from "hono";
 import { isLogReplacedByMapleTrace } from "@/external/maple/mapleTraceScope.js";
+import { setMapleExtrasSpanAttribute } from "@/external/maple/setMapleExtrasSpanAttribute.js";
 import type { AutumnContext, HonoEnv } from "@/honoUtils/HonoEnv.js";
 import { isAxiomResponseBodyReductionEnabled } from "@/internal/misc/miscellaneousEdgeConfig/miscellaneousEdgeConfigStore.js";
 import { addExtrasToLogs } from "@/utils/logging/addContextToLogs.js";
@@ -121,6 +122,8 @@ export const logRequestResult = async ({
 			traceId: trace.getActiveSpan()?.spanContext().traceId,
 			failed: statusCode >= 500,
 		});
+		if (isReplacedByTrace)
+			setMapleExtrasSpanAttribute({ extraLogs: ctx.extraLogs });
 
 		const isSuccess = statusCode >= 200 && statusCode < 300;
 		const reduceResponseBodyIngest = isAxiomResponseBodyReductionEnabled();

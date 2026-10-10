@@ -13,6 +13,7 @@ import { logStripeBillingPlan } from "@/internal/billing/v2/providers/stripe/log
 import { logStripeBillingResult } from "@/internal/billing/v2/providers/stripe/logs/logStripeBillingResult";
 import { buildBillingLockKey } from "@/internal/billing/v2/utils/billingLock/buildBillingLockKey";
 import { logAutumnBillingPlan } from "@/internal/billing/v2/utils/logs/logAutumnBillingPlan";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 export const handleCancelV2 = createRoute({
 	scopes: [Scopes.Billing.Write],
@@ -66,7 +67,14 @@ export const handleCancelV2 = createRoute({
 			entityId: entity_id,
 		});
 
-		if (discarded) return c.json({ success: true });
+		if (discarded) {
+			setRootSpanAttributes({
+				"billing.action": "cancel",
+				"billing.plan_id": product_id,
+				"billing.pending_plan_discarded": true,
+			});
+			return c.json({ success: true });
+		}
 
 		const billingContext = await setupUpdateSubscriptionBillingContext({
 			ctx,

@@ -1,5 +1,6 @@
 import { ErrCode, RecaseError } from "@autumn/shared";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { BatchTrackEntry } from "./batchTrackEntries.js";
 import { getAsyncTrackMessageGroupId } from "./utils/getAsyncTrackMessageGroupId.js";
 import { getTrackFeatureDeductionsForBody } from "./utils/getFeatureDeductions.js";
@@ -56,6 +57,11 @@ export const runBatchTrack = async ({
 		result === null ? [{ index: entries[position].index }] : [],
 	);
 	const successCount = results.length - failures.length;
+
+	setRootSpanAttributes({
+		"track.batch_queued": successCount,
+		"track.batch_failed": failures.length,
+	});
 
 	if (failures.length > 0) {
 		const isTotalFailure = successCount === 0;

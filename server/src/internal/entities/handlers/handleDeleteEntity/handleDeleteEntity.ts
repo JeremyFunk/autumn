@@ -9,6 +9,7 @@ import { releaseEntityAllocations } from "@/internal/balances/allocate/actions/r
 import { flushBalanceWorkerCustomer } from "@/internal/balances/balanceWorker/flushBalanceWorkerCustomer.js";
 import { adjustAllowance } from "@/internal/balances/utils/paidAllocatedFeature/adjustAllowance.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { createRoute } from "../../../../honoMiddlewares/routeHandler.js";
 import { EntityService } from "../../../api/entities/EntityService.js";
 import { CusService } from "../../../customers/CusService.js";
@@ -45,6 +46,12 @@ export const handleDeleteEntity = createRoute({
 		if (!entity) {
 			throw new EntityNotFoundError({ entityId: entity_id });
 		}
+
+		setRootSpanAttributes({
+			"entity.action": "delete",
+			"entity.id": entity_id,
+			"entity.feature_id": entity.feature_id,
+		});
 
 		const feature = findFeatureById({
 			features,

@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import { handleStripeSubscriptionCanceled } from "@/external/stripe/webhookHandlers/handleStripeSubscriptionUpdated/tasks/handleStripeSubscriptionCanceled/handleStripeSubscriptionCanceled.js";
 import { syncAutumnSubscription } from "@/external/stripe/webhookHandlers/handleStripeSubscriptionUpdated/tasks/syncAutumnSubscription.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext.js";
 import { emitBillingChangeWebhook, logCustomerProductUpdates } from "../common";
 import { setupStripeSubscriptionUpdatedContext } from "./setupStripeSubscriptionUpdatedContext.js";
@@ -30,8 +31,17 @@ export const handleStripeSubscriptionUpdated = async ({
 		ctx.logger.warn(
 			"[sub.updated] subscriptionUpdatedContext not found, skipping",
 		);
+		setRootSpanAttributes({ "stripe.webhook.outcome": "skipped_no_customer" });
 		return;
 	}
+
+	// "subscription_updated" stands unless a task below detects a cancel or renewal.
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "subscription_updated",
+		"stripe.subscription_id": subscriptionUpdatedContext.stripeSubscription.id,
+		"stripe.subscription_status":
+			subscriptionUpdatedContext.stripeSubscription.status,
+	});
 
 	// 1. Handle schedule phase changes
 	await handleSchedulePhaseChanges({

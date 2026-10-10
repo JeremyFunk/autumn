@@ -2,6 +2,7 @@ import { AffectedResource, DeleteCustomerParamsSchema, Scopes } from "@autumn/sh
 import { z } from "zod/v4";
 import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { customerActions } from "@/internal/customers/actions/index.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 const DeleteCustomerQuerySchema = z.object({
 	delete_in_stripe: z.boolean().optional().default(false),
@@ -15,6 +16,11 @@ export const handleDeleteCustomer = createRoute({
 		const ctx = c.get("ctx");
 		const { customer_id } = c.req.param();
 		const { delete_in_stripe } = c.req.valid("query");
+
+		setRootSpanAttributes({
+			"customer.action": "delete",
+			"customer.delete_in_stripe": delete_in_stripe,
+		});
 
 		await customerActions.delete({
 			ctx,
@@ -35,6 +41,11 @@ export const handleDeleteCustomerV2 = createRoute({
 	handler: async (c) => {
 		const ctx = c.get("ctx");
 		const params = c.req.valid("json");
+
+		setRootSpanAttributes({
+			"customer.action": "delete",
+			"customer.delete_in_stripe": params.delete_in_stripe,
+		});
 
 		await customerActions.delete({
 			ctx,

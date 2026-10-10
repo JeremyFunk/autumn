@@ -1,5 +1,6 @@
 import { CreateEntityParamsV1Schema, Scopes } from "@autumn/shared";
 import type { z } from "zod/v4";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { createRoute } from "../../../../honoMiddlewares/routeHandler.js";
 import type { AutumnContext } from "../../../../honoUtils/HonoEnv.js";
 import { entityActions } from "../../actions/index.js";
@@ -12,6 +13,12 @@ export const createEntityV2 = async ({
 	params: z.infer<typeof CreateEntityParamsV1Schema>;
 }) => {
 	ctx.skipCache = true;
+
+	setRootSpanAttributes({
+		"entity.action": "create",
+		"entity.id": params.entity_id,
+		"entity.feature_id": params.feature_id,
+	});
 
 	const apiEntities = await entityActions.batchCreate({
 		ctx,

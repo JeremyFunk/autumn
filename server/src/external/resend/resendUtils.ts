@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { withDependencySpan } from "@/utils/otel/withDependencySpan.js";
 import { logger } from "../logtail/logtailUtils.js";
 
 interface ResendEmailProps {
@@ -14,6 +15,14 @@ export const createResendCli = () => {
 	return new Resend(process.env.RESEND_API_KEY);
 };
 
+const resendSendSpan = ({ emailType }: { emailType: "text" | "html" }) => ({
+	name: "resend.send",
+	attributes: {
+		"server.address": "api.resend.com",
+		"resend.email_type": emailType,
+	},
+});
+
 export const sendTextEmail = async ({
 	from,
 	to,
@@ -24,11 +33,15 @@ export const sendTextEmail = async ({
 
 	try {
 		logger.info(`Sending email to ${to} with subject ${subject}`);
-		const { error } = await resend.emails.send({
-			from: from,
-			to: to,
-			subject: subject,
-			text: body,
+		const { error } = await withDependencySpan({
+			...resendSendSpan({ emailType: "text" }),
+			fn: () =>
+				resend.emails.send({
+					from: from,
+					to: to,
+					subject: subject,
+					text: body,
+				}),
 		});
 
 		if (error) {
@@ -65,12 +78,16 @@ export const sendHtmlEmail = async ({
 }: ResendEmailProps) => {
 	const resend = createResendCli();
 
-	await resend.emails.send({
-		from: from,
-		to: to,
-		subject: subject,
-		html: body,
-		replyTo,
+	await withDependencySpan({
+		...resendSendSpan({ emailType: "html" }),
+		fn: () =>
+			resend.emails.send({
+				from: from,
+				to: to,
+				subject: subject,
+				html: body,
+				replyTo,
+			}),
 	});
 };
 

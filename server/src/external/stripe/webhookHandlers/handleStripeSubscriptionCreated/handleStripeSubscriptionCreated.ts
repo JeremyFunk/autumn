@@ -1,3 +1,4 @@
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { StripeWebhookContext } from "../../webhookMiddlewares/stripeWebhookContext.js";
 import { setupStripeSubscriptionCreatedContext } from "./setupStripeSubscriptionCreatedContext.js";
 import { autoSyncFromSubscriptionWithLock } from "./tasks/autoSyncFromSubscription.js";
@@ -11,7 +12,10 @@ export const handleStripeSubscriptionCreated = async ({
 }) => {
 	const subscriptionCreatedContext =
 		await setupStripeSubscriptionCreatedContext({ ctx });
-	if (!subscriptionCreatedContext) return;
+	if (!subscriptionCreatedContext) {
+		setRootSpanAttributes({ "stripe.webhook.outcome": "skipped_no_customer" });
+		return;
+	}
 
 	await linkScheduledCustomerProductsToSubscription({
 		ctx,
@@ -23,5 +27,12 @@ export const handleStripeSubscriptionCreated = async ({
 	await upsertSubscriptionRow({
 		ctx,
 		subscription: subscriptionCreatedContext.subscription,
+	});
+
+	setRootSpanAttributes({
+		"stripe.webhook.outcome": "subscription_created",
+		"stripe.subscription_id": subscriptionCreatedContext.subscription.id,
+		"stripe.subscription_status":
+			subscriptionCreatedContext.subscription.status,
 	});
 };

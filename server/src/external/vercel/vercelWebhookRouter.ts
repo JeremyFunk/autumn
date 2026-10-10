@@ -6,6 +6,7 @@ import { planAliasMiddleware } from "@/honoMiddlewares/planAliasMiddleware.js";
 import { traceEnrichMiddleware } from "@/honoMiddlewares/traceMiddleware.js";
 import type { HonoEnv } from "@/honoUtils/HonoEnv.js";
 import { logCaughtError } from "@/utils/logging/logCaughtError.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { sendCustomSvixEvent } from "../svix/svixHelpers.js";
 import { handleVercelListBillingPlans } from "./handlers/handleListBillingPlans.js";
 import { handleUpdateVercelBillingPlan } from "./handlers/handleUpdateBillingPlan.js";
@@ -138,6 +139,14 @@ vercelWebhookRouter.post(
 
 		const eventType = body.type;
 
+		// "handled" stands unless the event is only forwarded to the org below.
+		setRootSpanAttributes(() => ({
+			"vercel.action": "webhook",
+			"vercel.event.type": eventType,
+			"vercel.installation_id": body.installation_id,
+			"vercel.webhook.handled": true,
+		}));
+
 		try {
 			switch (eventType) {
 				case "marketplace.invoice.created":
@@ -169,6 +178,7 @@ vercelWebhookRouter.post(
 					return c.json({ received: true }, 200);
 
 				default:
+					setRootSpanAttributes({ "vercel.webhook.handled": false });
 					await sendCustomSvixEvent({
 						appId:
 							org.processor_configs?.vercel?.svix?.[

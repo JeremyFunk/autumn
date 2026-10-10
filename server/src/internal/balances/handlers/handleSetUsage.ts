@@ -10,6 +10,7 @@ import { createRoute } from "@/honoMiddlewares/routeHandler.js";
 import { withCreateIfMissing } from "@/internal/balanceWorker/subject/withCreateIfMissing.js";
 import { getOrCreateCachedFullSubject } from "@/internal/customers/cache/fullSubject/actions/getOrCreateCachedFullSubject.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { runBalanceWorkerUpdateBalance } from "../updateBalance/balanceWorker/runBalanceWorkerUpdateBalance.js";
 import { updateUsageV2 } from "../updateBalance/v2/updateUsageV2.js";
 import { validateInvoiceCreditBalanceMutationForFeature } from "../utils/validateInvoiceCreditBalanceMutation.js";
@@ -26,6 +27,12 @@ export const handleSetUsage = createRoute({
 	handler: async (c) => {
 		const body = c.req.valid("json");
 		const ctx = c.get("ctx");
+
+		setRootSpanAttributes({
+			"balance.action": "set_usage",
+			"balance.feature_id": body.feature_id,
+			"balance.usage": body.value,
+		});
 
 		// Legacy `/usage` creates a missing customer, so the worker path does too.
 		if (isBalanceWorkerRolloutEnabled({ ctx, customerId: body.customer_id })) {
@@ -50,6 +57,7 @@ export const handleSetUsage = createRoute({
 				});
 			} catch (error) {
 				if (!isNoBalanceForFeature({ error })) throw error;
+				setRootSpanAttributes({ "balance.no_balance_for_feature": true });
 			}
 			return c.json({ success: true });
 		}

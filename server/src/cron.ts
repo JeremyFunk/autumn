@@ -3,6 +3,9 @@ import { initInfisical } from "./external/infisical/initInfisical.js";
 
 await initInfisical();
 getAutumnEnv();
+// Cron is only traced for Maple, so the SDK starts before anything that
+// creates spans is loaded, and not at all without a key.
+if (process.env.MAPLE_INGEST_KEY) await import("./instrumentation.js");
 const { warmupRegionalRedis } = await import("./external/redis/initRedis.js");
 await warmupRegionalRedis();
 

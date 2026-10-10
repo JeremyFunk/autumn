@@ -16,6 +16,7 @@ import { carryReplacedSubscriptionSettings } from "@/internal/billing/v2/setup/c
 import { computeAttachPreviewBillingPlan } from "@/internal/billing/v2/utils/billingPlan/preview/computeAttachPreviewBillingPlan";
 import { logAutumnBillingPlan } from "@/internal/billing/v2/utils/logs/logAutumnBillingPlan";
 import { hashJson } from "@/utils/hash/hashJson";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { computeSetPlansPlan } from "./compute/computeSetPlansPlan";
 import {
 	handleSetPlansBillingPlanErrors,
@@ -41,6 +42,20 @@ export const setPlans = async ({
 	preview?: boolean;
 	skipAutumnCheckout?: boolean;
 }): Promise<SetPlansResult> => {
+	setRootSpanAttributes(() => ({
+		"billing.action": "set_plans",
+		"billing.plan_ids": [
+			...new Set(
+				params.phases.flatMap((phase) =>
+					phase.plans.map((plan) => plan.plan_id),
+				),
+			),
+		]
+			.slice(0, 10)
+			.join(","),
+		"billing.preview": preview || undefined,
+	}));
+
 	// Explicit, so a checkout that resumes these params keeps the same policy.
 	const resolvedParams: SetPlansParamsV0 = {
 		...params,
