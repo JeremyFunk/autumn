@@ -293,9 +293,14 @@ export const slimMapleLogLine = ({
 
 		const [first, ...rest] = args;
 		const ids = { trace_id: traceId, span_id: spanId };
-		return first !== null && typeof first === "object"
-			? [{ ...first, ...ids }, ...rest]
-			: [ids, ...args];
+		if (first === null || typeof first !== "object") return [ids, ...args];
+		// The request and tenant context ride on each line's fields, not on logger bindings.
+		const {
+			req: _req,
+			context: _context,
+			...fields
+		} = first as Record<string, unknown>;
+		return [{ ...fields, ...ids }, ...rest];
 	} catch {
 		return undefined;
 	}
