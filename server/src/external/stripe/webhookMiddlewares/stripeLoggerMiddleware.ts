@@ -5,7 +5,6 @@ import {
 	addAppContextToLogs,
 	addStripeEventToLogs,
 } from "@/utils/logging/addContextToLogs";
-import { setStripeEventSpanAttributes } from "./setStripeEventSpanAttributes.js";
 import type {
 	StripeWebhookContext,
 	StripeWebhookHonoEnv,
@@ -67,7 +66,6 @@ export const stripeLoggerMiddleware = async (
 			object_id: `${stripeEvent.data?.object?.id}` || "N/A",
 		},
 	});
-	setStripeEventSpanAttributes({ stripeEvent });
 
 	logStripeWebhookRequest({ ctx });
 

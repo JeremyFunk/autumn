@@ -1,27 +1,37 @@
 import {
 	type Attributes,
+	type Context,
 	context,
 	createContextKey,
 	type Span,
-	trace,
 } from "@opentelemetry/api";
 
 const ROOT_SPAN_CONTEXT_KEY = createContextKey("autumn.root_span");
 
-/** Binds the trace's root span, so code under child spans can still reach it. */
-export const withRootSpan = <T>({ span, fn }: { span: Span; fn: () => T }): T =>
-	context.with(context.active().setValue(ROOT_SPAN_CONTEXT_KEY, span), fn);
-
 /**
- * The bound root span, else the active span. Ended spans are skipped: an
- * early-acked Stripe webhook outlives its root, and writing to an ended span
- * only logs a warning.
+ * Binds the span that carries a unit of work's outcome: the HTTP root for a
+ * request, the job span for a worker, and the deferred span for the part of an
+ * early-acked Stripe webhook that runs after the response.
  */
-export const getRootSpan = (): Span | undefined => {
-	const rootSpan = context.active().getValue(ROOT_SPAN_CONTEXT_KEY) as
+export const setRootSpan = ({
+	context: parentContext,
+	span,
+}: {
+	context: Context;
+	span: Span;
+}): Context => parentContext.setValue(ROOT_SPAN_CONTEXT_KEY, span);
+
+export const withRootSpan = <T>({ span, fn }: { span: Span; fn: () => T }): T =>
+	context.with(setRootSpan({ context: context.active(), span }), fn);
+
+/** The bound span while it is still open. Nothing is guessed: with none bound, or once it has ended, there is no span to write to. */
+export const getRootSpan = (
+	activeContext: Context = context.active(),
+): Span | undefined => {
+	const rootSpan = activeContext.getValue(ROOT_SPAN_CONTEXT_KEY) as
 		| Span
 		| undefined;
-	return [rootSpan, trace.getActiveSpan()].find((span) => span?.isRecording());
+	return rootSpan?.isRecording() ? rootSpan : undefined;
 };
 
 /**

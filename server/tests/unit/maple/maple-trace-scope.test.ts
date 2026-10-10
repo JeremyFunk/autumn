@@ -6,7 +6,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { type Attributes, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import {
+	type Attributes,
+	ROOT_CONTEXT,
+	type Span,
+	SpanKind,
+	SpanStatusCode,
+} from "@opentelemetry/api";
 import type {
 	ReadableSpan,
 	SpanProcessor,
@@ -22,6 +28,7 @@ import {
 } from "@/external/maple/mapleTraceScope.js";
 import { JobName } from "@/queue/JobName.js";
 import { MapleScopedSpanProcessor } from "@/utils/otel/MapleScopedSpanProcessor.js";
+import { getRootSpan, setRootSpan } from "@/utils/otel/rootSpan.js";
 import {
 	formatTraceparent,
 	parseTraceparent,
@@ -234,6 +241,21 @@ describe("recordLogAsMapleSpanEvent", () => {
 		expect(recordLogAsMapleSpanEvent({ args, level: 30, enabled: true })).toBe(
 			false,
 		);
+	});
+});
+
+describe("getRootSpan", () => {
+	const fakeSpan = (recording: boolean) =>
+		({ isRecording: () => recording }) as Span;
+
+	test("returns the bound span only while it is open, and never guesses", () => {
+		const bound = (span: Span) =>
+			getRootSpan(setRootSpan({ context: ROOT_CONTEXT, span }));
+
+		expect(getRootSpan(ROOT_CONTEXT)).toBeUndefined();
+		const open = fakeSpan(true);
+		expect(bound(open)).toBe(open);
+		expect(bound(fakeSpan(false))).toBeUndefined();
 	});
 });
 

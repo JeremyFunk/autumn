@@ -1,8 +1,10 @@
 import { context, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { Context, Next } from "hono";
+import { setRootSpan } from "@/utils/otel/rootSpan.js";
 import { enqueueStripeWebhookReplay } from "../webhookReplay/enqueueStripeWebhookReplay.js";
 import { stripeWebhookErrorWouldRedeliver } from "../webhookReplay/stripeWebhookErrorWouldRedeliver.js";
 import { classifyStripeWebhookAckMode } from "./classifyStripeWebhookAckMode.js";
+import { setStripeEventSpanAttributes } from "./setStripeEventSpanAttributes.js";
 import type { StripeWebhookHonoEnv } from "./stripeWebhookContext.js";
 
 const tracer = trace.getTracer("autumn-stripe-webhook");
@@ -31,13 +33,16 @@ export const stripeWebhookAckMiddleware = async (
 		classifyStripeWebhookAckMode({ event: ctx.stripeEvent });
 	const idempotency = ctx.webhookIdempotency;
 
+	// Stamped before the ack: an early ack ends the HTTP span, and the event is
+	// what identifies the trace in a list.
+	setStripeEventSpanAttributes({ stripeEvent: ctx.stripeEvent, ackMode });
+
 	if (ackMode === "sync") {
 		const queueSyncFailure = (error: unknown) => {
 			if (!stripeWebhookErrorWouldRedeliver({ error })) return;
 			return enqueueStripeWebhookReplay({
 				ctx,
-				failureReason:
-					error instanceof Error ? error.message : String(error),
+				failureReason: error instanceof Error ? error.message : String(error),
 			});
 		};
 
@@ -70,8 +75,13 @@ export const stripeWebhookAckMiddleware = async (
 	// Start a span that survives past the early-ack response. Parented to the
 	// still-active root HTTP span; ended in finally(...) when deferred work
 	// completes so traceEnrichMiddleware + child spans land on a live span.
+	// Bound as the root span too: what the handler decides after the ack is
+	// stamped here, the HTTP span having ended.
 	const deferredSpan = tracer.startSpan("stripe.webhook.deferred");
-	const ctxWithSpan = trace.setSpan(context.active(), deferredSpan);
+	const ctxWithSpan = setRootSpan({
+		context: trace.setSpan(context.active(), deferredSpan),
+		span: deferredSpan,
+	});
 
 	const runWebhook = () =>
 		context.with(ctxWithSpan, () =>
