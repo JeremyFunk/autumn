@@ -254,6 +254,19 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 
 	streams.push(...createMapleLogStreams());
 
+	// DEMO ONLY (not part of the Maple PR): tee the exact JSON lines a prod
+	// stream would ship into a per-process file, to measure log bytes locally.
+	if (process.env.AUTUMN_LOG_CAPTURE_FILE) {
+		streams.push({
+			level: "info",
+			stream: pino.destination({
+				dest: `${process.env.AUTUMN_LOG_CAPTURE_FILE}.${process.pid}.jsonl`,
+				sync: true,
+				mkdir: true,
+			}),
+		});
+	}
+
 	const logger = pino(
 		{
 			level: isDev || isTest || mode === "dual" ? "debug" : "info",

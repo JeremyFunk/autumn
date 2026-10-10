@@ -4,6 +4,7 @@ import {
 	type Organization,
 	RecaseError,
 } from "@autumn/shared";
+import { stripeStubConfig } from "@server/external/stripe/stripeStub.js";
 import { isStripeConnected } from "@server/internal/orgs/orgUtils.js";
 import { decryptData } from "@server/utils/encryptUtils.js";
 import { instrumentStripe } from "@server/utils/otel/instrumentStripe.js";
@@ -58,6 +59,7 @@ export const createStripeCli = ({
 						? // biome-ignore lint/suspicious/noExplicitAny: Need to cast to any to avoid type error
 							("2025-02-24.acacia" as any)
 						: undefined,
+					...stripeStubConfig(),
 				});
 				return skipInstrumentation ? client : instrumentStripe({ client });
 			},
