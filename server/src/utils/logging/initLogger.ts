@@ -275,7 +275,16 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 					const line = slimMapleLogLine({
 						args,
 						level,
-						bindings: () => this.bindings(),
+						bindings: () => {
+							// The root logger writes these itself.
+							const {
+								deployment: _deployment,
+								hostname: _hostname,
+								pid: _pid,
+								...own
+							} = this.bindings();
+							return own;
+						},
 					});
 					if (line === "drop") return;
 					// A slimmed line goes through the root logger: it carries the
