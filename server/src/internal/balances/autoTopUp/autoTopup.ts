@@ -14,6 +14,7 @@ import { logAutumnBillingPlan } from "@/internal/billing/v2/utils/logs/logAutumn
 import { invalidateCachedFullSubject } from "@/internal/customers/cache/fullSubject/actions/invalidate/invalidateFullSubject.js";
 import { updateCachedCustomerProductV2 } from "@/internal/customers/cache/fullSubject/actions/updateCachedCustomerProduct.js";
 import { isBalanceWorkerRolloutEnabled } from "@/internal/misc/rollouts/isBalanceWorkerRolloutEnabled.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import type { AutoTopupContext } from "./autoTopupContext.js";
 import { computeAutoTopupPlan } from "./compute/computeAutoTopupPlan.js";
 import { buildAutoTopUpLockKey } from "./helpers/autoTopUpUtils.js";
@@ -47,6 +48,12 @@ export const autoTopup = async ({
 	let lastAutoTopupContext: AutoTopupContext | undefined;
 	let pendingTtlMs: number | undefined;
 
+	// "skipped" stands unless the run charges or fails below.
+	setRootSpanAttributes({
+		"auto_topup.feature_id": featureId,
+		"auto_topup.result": "skipped",
+	});
+
 	const sendFailureWebhook = async ({
 		autoTopupContext,
 		...failure
@@ -55,6 +62,7 @@ export const autoTopup = async ({
 		"ctx" | "customerId" | "featureId"
 	>) => {
 		failureWebhookSent = true;
+		setRootSpanAttributes({ "auto_topup.result": failure.reason });
 		await sendAutoTopupFailedWebhook({
 			ctx,
 			customerId,
@@ -97,6 +105,12 @@ export const autoTopup = async ({
 		lastAutoTopupContext = autoTopupContext;
 
 		logAutoTopupContext({ ctx, autoTopupContext });
+		setRootSpanAttributes({
+			"auto_topup.threshold": autoTopupContext.autoTopupConfig.threshold,
+			"auto_topup.quantity": autoTopupContext.autoTopupConfig.quantity,
+			"auto_topup.balance":
+				autoTopupContext.customerEntitlement.balance ?? undefined,
+		});
 
 		// 3. Compute — build line items + autumn billing plan + stripe invoice action
 		const { autumnBillingPlan, stripeBillingPlan } = computeAutoTopupPlan({
@@ -229,6 +243,7 @@ export const autoTopup = async ({
 			autoTopupContext,
 			billingResult,
 		});
+		setRootSpanAttributes({ "auto_topup.result": "succeeded" });
 
 		const durationMs = Math.round(performance.now() - start);
 		logger.info(

@@ -18,7 +18,7 @@ export const withDynamoSpan = async <T>({
 }): Promise<T> =>
 	tracer.startActiveSpan(
 		`dynamodb.${name}`,
-		{ kind: SpanKind.CLIENT },
+		{ kind: SpanKind.CLIENT, attributes: { "db.system.name": "aws.dynamodb" } },
 		async (span) => {
 			if (attributes) span.setAttributes(attributes);
 

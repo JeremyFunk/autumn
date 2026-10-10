@@ -4,8 +4,10 @@ import { createStripeCli } from "@/external/connect/createStripeCli.js";
 import { initMasterStripe } from "@/external/connect/initStripeCli.js";
 import type { AutumnContext } from "@/honoUtils/HonoEnv.js";
 import { deleteCachedFullCustomer } from "@/internal/customers/cusUtils/fullCustomerCacheUtils/deleteCachedFullCustomer.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 import { runStripeWebhookHandlers } from "../runStripeWebhookHandlers.js";
 import { isStripeWebhookLockRequired } from "../webhookMiddlewares/classifyStripeWebhookAckMode.js";
+import { setStripeEventSpanAttributes } from "../webhookMiddlewares/setStripeEventSpanAttributes.js";
 import {
 	buildStripeWebhookEventKey,
 	claimStripeWebhookEvent,
@@ -51,6 +53,12 @@ export const runStripeWebhookReplay = async ({
 	const { stripeEvent } = payload;
 	const { logger } = ctx;
 
+	setStripeEventSpanAttributes({ stripeEvent });
+	setRootSpanAttributes({
+		"stripe.replay.failed_at": payload.failedAt,
+		"stripe.replay.failure_reason": payload.failureReason?.slice(0, 500),
+	});
+
 	const webhookCtx: StripeWebhookContext = {
 		...ctx,
 		authType: AuthType.Stripe,
@@ -69,6 +77,7 @@ export const runStripeWebhookReplay = async ({
 		eventId: stripeEvent.id,
 	});
 	const claim = await claimStripeWebhookEvent({ eventKey });
+	setRootSpanAttributes({ "stripe.replay.claim": claim });
 
 	if (claim === "duplicate_completed") {
 		logger.info(

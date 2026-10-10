@@ -9,6 +9,7 @@ import { prepareNewBalanceForInsertion } from "@/internal/balances/createBalance
 import { validateCreateBalanceParams } from "@/internal/balances/createBalance/validateCreateBalance";
 import { getSubjectFullCustomer } from "@/internal/balances/utils/getSubjectFullCustomer.js";
 import { executeAutumnBillingPlan } from "@/internal/billing/v2/execute/executeAutumnBillingPlan/executeAutumnBillingPlan.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 export const handleCreateBalance = createRoute({
 	scopes: [Scopes.Balances.Write],
@@ -43,6 +44,11 @@ export const handleCreateBalance = createRoute({
 				fullCustomer,
 				params: createBalanceParams,
 			});
+
+		setRootSpanAttributes({
+			"balance.feature_id": feature_id,
+			"balance.after": newCustomerEntitlement.balance ?? 0,
+		});
 
 		// Through the plan executor, so the grant lands on the worker's log like every other balance write.
 		await executeAutumnBillingPlan({

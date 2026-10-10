@@ -2,6 +2,7 @@ import type { AttachBillingContext } from "@autumn/shared";
 import { formatMs } from "@autumn/shared";
 import type { AutumnContext } from "@/honoUtils/HonoEnv";
 import { addToExtraLogs } from "@/utils/logging/addToExtraLogs";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 export const logAttachContext = ({
 	ctx,
@@ -28,6 +29,16 @@ export const logAttachContext = ({
 		resetCycleAnchorMs,
 		trialContext,
 	} = billingContext;
+
+	setRootSpanAttributes({
+		"billing.action": "attach",
+		"billing.plan_id": attachProduct.id,
+		"billing.plan_version": attachProduct.version,
+		"billing.from_plan_id": currentCustomerProduct?.product.id,
+		"billing.plan_timing": planTiming,
+		"billing.checkout_mode": checkoutMode ?? undefined,
+		"billing.no_billing_changes": billingContext.skipBillingChanges,
+	});
 
 	addToExtraLogs({
 		ctx,

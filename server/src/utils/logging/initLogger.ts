@@ -5,6 +5,7 @@ import { normalizeErrorValues, resolveDeployment } from "@autumn/logging";
 import pino from "pino";
 import { getAwsTaskIdentity } from "@/external/aws/ecs/awsTaskIdentity.js";
 import { createMapleLogStreams } from "@/external/maple/createMapleLogStreams.js";
+import { recordLogAsMapleSpanEvent } from "@/external/maple/mapleTraceScope.js";
 import { classifyInfraError } from "./classifyInfraError.js";
 
 /**
@@ -254,6 +255,13 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 
 	streams.push(...createMapleLogStreams());
 
+	const errorLogHook = createErrorLogHook({
+		service: "server",
+		captureToSentry: process.env.SENTRY_CAPTURE_LOGGED_ERRORS !== "false",
+		loggerFramePaths: ["/external/logtail/", "/utils/logging/"],
+		classifiers: [classifyInfraError],
+	});
+
 	const logger = pino(
 		{
 			level: isDev || isTest || mode === "dual" ? "debug" : "info",
@@ -263,12 +271,10 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 				pid: process.pid,
 			},
 			hooks: {
-				logMethod: createErrorLogHook({
-					service: "server",
-					captureToSentry: process.env.SENTRY_CAPTURE_LOGGED_ERRORS !== "false",
-					loggerFramePaths: ["/external/logtail/", "/utils/logging/"],
-					classifiers: [classifyInfraError],
-				}),
+				logMethod(args, method, level) {
+					if (recordLogAsMapleSpanEvent({ args, level })) return;
+					errorLogHook?.call(this, args, method, level);
+				},
 			},
 			// Tag every log line with this process's AWS task identity so Axiom
 			// can distinguish blue/green task sets. Returns {} until

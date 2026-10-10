@@ -1,5 +1,8 @@
+import { stripVTControlCharacters } from "node:util";
 import { context, trace } from "@opentelemetry/api";
 import type { MiddlewareHandler } from "hono";
+import { JobName } from "@/queue/JobName.js";
+import { getRootSpan, withRootSpan } from "@/utils/otel/rootSpan.js";
 import { BILLING_PATHS } from "./parseMapleLog.js";
 
 /** `keep` exports the whole trace; `sample` keeps errors, slow roots and a share of the rest. */
@@ -23,6 +26,25 @@ const HOT_LEGACY_SEGMENTS = new Set([
 	"usage",
 	"events",
 	"query",
+]);
+
+// The queue's side of the hot path: one message per usage event or balance sync.
+const HOT_JOBS = new Set<string>([
+	JobName.Track,
+	JobName.InsertEventBatch,
+	JobName.SyncBalanceBatchV4,
+	JobName.SyncCustomerDirty,
+	JobName.PersistPublishedBalanceTransitions,
+	JobName.RefreshEntityAggregate,
+	JobName.UpdateUsage,
+	JobName.UpdateBalance,
+]);
+// What a billing request or Stripe webhook leaves for the worker to finish.
+const BILLING_JOBS = new Set<string>([
+	JobName.AutoTopUp,
+	JobName.StripeWebhookReplay,
+	JobName.StoreInvoiceLineItems,
+	JobName.StoreDeferredInvoiceLineItems,
 ]);
 
 const isReadAction = (action: string) =>
@@ -72,6 +94,19 @@ export const classifyMapleRequest = ({
 	return scope === "api" ? "sample" : null;
 };
 
+/** Worker jobs follow the request scopes: billing jobs always, hot jobs sampled with scope `api`, the rest unless the scope is `billing`. */
+export const classifyMapleJob = ({
+	jobName,
+	scope = MAPLE_TRACE_SCOPE,
+}: {
+	jobName: string;
+	scope?: MapleTraceScope;
+}): MapleTraceMode | null => {
+	if (BILLING_JOBS.has(jobName)) return "keep";
+	if (HOT_JOBS.has(jobName)) return scope === "api" ? "sample" : null;
+	return scope === "billing" ? null : "keep";
+};
+
 // Stripe webhooks keep working after the early ack ends the root span, so
 // marks are never cleared on root end; FIFO eviction bounds memory instead.
 const MAX_MARKED_TRACES = 10_000;
@@ -105,15 +140,88 @@ export const unmarkMapleTrace = (traceId: string) => {
 	marks.delete(traceId);
 };
 
-/** Must run right after the OTel HTTP middleware, so the root span is active. */
+/**
+ * Must run right after the OTel HTTP middleware, so the root span is active.
+ * Binds it for every request, whatever the mode, so handlers can stamp it.
+ */
 export const mapleTraceScopeMiddleware: MiddlewareHandler = (c, next) => {
+	const span = trace.getSpan(context.active());
+	if (!span) return next();
+
 	const mode = classifyMapleRequest({ method: c.req.method, path: c.req.path });
 	if (mode) {
-		const span = trace.getSpan(context.active());
-		if (span) {
-			const { traceId, spanId } = span.spanContext();
-			markTraceForMaple({ traceId, rootSpanId: spanId, mode });
-		}
+		const { traceId, spanId } = span.spanContext();
+		markTraceForMaple({ traceId, rootSpanId: spanId, mode });
 	}
-	return next();
+	return withRootSpan({ span, fn: next });
+};
+
+/** Marks the active worker span's trace. A job continuing a request's trace is kept, since only kept traces propagate. */
+export const markJobTraceForMaple = ({
+	jobName,
+	isContinued,
+}: {
+	jobName: string;
+	isContinued: boolean;
+}) => {
+	const span = trace.getSpan(context.active());
+	const mode = isContinued ? "keep" : classifyMapleJob({ jobName });
+	if (!span || !mode) return;
+
+	const { traceId, spanId } = span.spanContext();
+	markTraceForMaple({ traceId, rootSpanId: spanId, mode });
+};
+
+const REPLACE_REQUEST_LOGS =
+	Boolean(process.env.MAPLE_INGEST_KEY) &&
+	process.env.MAPLE_REPLACE_REQUEST_LOGS === "true";
+
+/** True when the trace sent to Maple stands in for a request or job log line. Failures always log. */
+export const isLogReplacedByMapleTrace = ({
+	traceId,
+	failed,
+	enabled = REPLACE_REQUEST_LOGS,
+}: {
+	traceId: string | undefined;
+	failed: boolean;
+	enabled?: boolean;
+}) =>
+	enabled &&
+	!failed &&
+	traceId !== undefined &&
+	getMapleTraceMark(traceId) !== undefined;
+
+const PINO_INFO_LEVEL = 30;
+const MAX_LOG_EVENT_NAME_LENGTH = 300;
+
+/**
+ * An info line logged under a trace going to Maple becomes an event on that
+ * trace instead: the request context is stated once on the root span rather
+ * than repeated on every line, and the breadcrumb is sampled with its trace.
+ * Returns true when the line was recorded and should not be logged.
+ */
+export const recordLogAsMapleSpanEvent = ({
+	args,
+	level,
+	enabled = REPLACE_REQUEST_LOGS,
+}: {
+	args: unknown[];
+	level: number;
+	enabled?: boolean;
+}): boolean => {
+	if (!enabled || level !== PINO_INFO_LEVEL) return false;
+	try {
+		const span = trace.getActiveSpan();
+		if (!span || !getMapleTraceMark(span.spanContext().traceId)) return false;
+
+		const message = args.find((arg) => typeof arg === "string");
+		const target = span.isRecording() ? span : getRootSpan();
+		if (message === undefined || !target) return false;
+		target.addEvent(
+			stripVTControlCharacters(message).slice(0, MAX_LOG_EVENT_NAME_LENGTH),
+		);
+		return true;
+	} catch {
+		return false;
+	}
 };

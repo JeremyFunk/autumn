@@ -10,6 +10,8 @@ import {
 	promoteMapleTrace,
 	unmarkMapleTrace,
 } from "@/external/maple/mapleTraceScope.js";
+import { withAttributes } from "./SpanIngestCompactor.js";
+import { TENANT_ATTR_KEYS } from "./tenantContext.js";
 
 const MAX_BUFFERED_TRACES = 2_000;
 const MAX_SPANS_PER_BUFFERED_TRACE = 256;
@@ -45,15 +47,28 @@ const hashToUnitInterval = (value: string) => {
 const durationMs = (span: ReadableSpan) =>
 	span.duration[0] * 1000 + span.duration[1] / 1_000_000;
 
-const isFailedRoot = (span: ReadableSpan) => {
+// Denials and client errors are what investigations look for, so they are never sampled out.
+const isAlwaysKeptRoot = (span: ReadableSpan) => {
 	const status = Number(span.attributes["http.response.status_code"]);
-	return span.status.code === SpanStatusCode.ERROR || status >= 500;
+	return (
+		span.status.code === SpanStatusCode.ERROR ||
+		status >= 400 ||
+		span.attributes["maple.keep"] === true
+	);
+};
+
+// Tenant attrs are copied onto every child span, where they are most of the
+// span's size. The root carries them, so children are sent without.
+const withoutTenantAttrs = (span: ReadableSpan): ReadableSpan => {
+	const attributes = { ...span.attributes };
+	for (const key of TENANT_ATTR_KEYS) delete attributes[key];
+	return withAttributes({ span, attributes });
 };
 
 /**
- * Forwards spans of traces marked by mapleTraceScopeMiddleware. `keep` traces
- * pass straight through; `sample` traces are held until their root ends, then
- * kept if it failed, was slow, or falls in the sample rate.
+ * Forwards spans of traces marked for Maple. `keep` traces pass straight
+ * through; `sample` traces are held until their root ends, then kept if it
+ * failed, was denied, was slow, or falls in the sample rate.
  */
 export class MapleScopedSpanProcessor implements SpanProcessor {
 	private readonly buffers = new Map<string, ReadableSpan[]>();
@@ -77,19 +92,20 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 		const { traceId, spanId } = span.spanContext();
 		const mark = this.options.marks.get(traceId);
 		if (!mark) return;
+		const isRoot = spanId === mark.rootSpanId;
 		if (mark.mode === "keep") {
-			this.delegate.onEnd(span);
+			this.delegate.onEnd(isRoot ? span : withoutTenantAttrs(span));
 			return;
 		}
-		if (spanId !== mark.rootSpanId) {
-			this.buffer(traceId, span);
+		if (!isRoot) {
+			this.buffer(traceId, withoutTenantAttrs(span));
 			return;
 		}
 
 		const buffered = this.buffers.get(traceId) ?? [];
 		this.buffers.delete(traceId);
 		const kept =
-			isFailedRoot(span) ||
+			isAlwaysKeptRoot(span) ||
 			durationMs(span) >= this.options.slowMs ||
 			hashToUnitInterval(traceId) < this.options.sampleRate;
 		if (!kept) {

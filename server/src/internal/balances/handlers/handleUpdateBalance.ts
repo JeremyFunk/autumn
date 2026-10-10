@@ -8,6 +8,7 @@ import {
 } from "@autumn/shared";
 import { createRoute } from "@/honoMiddlewares/routeHandler";
 import { updateBalanceV2 } from "@/internal/balances/updateBalance/v2/updateBalanceV2.js";
+import { setRootSpanAttributes } from "@/utils/otel/rootSpan.js";
 
 export const handleUpdateBalance = createRoute({
 	scopes: [Scopes.Balances.Write],
@@ -34,6 +35,10 @@ export const handleUpdateBalance = createRoute({
 		}
 
 		const targetBalance = params.remaining ?? params.current_balance;
+		setRootSpanAttributes({
+			"balance.feature_id": params.feature_id,
+			"balance.after": targetBalance,
+		});
 
 		await updateBalanceV2({ ctx, params, targetBalance });
 

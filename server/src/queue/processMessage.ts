@@ -1,11 +1,16 @@
 import { reportError } from "@autumn/errors";
 import { ErrCode, RecaseError } from "@autumn/shared";
 import type { Message } from "@aws-sdk/client-sqs";
+import { trace } from "@opentelemetry/api";
 import chalk from "chalk";
 import type { Logger } from "pino";
 import { isTransientDbError } from "@/db/dbUtils.js";
 import type { DrizzleCli } from "@/db/initDrizzle.js";
 import { logger } from "@/external/logtail/logtailUtils.js";
+import {
+	isLogReplacedByMapleTrace,
+	markJobTraceForMaple,
+} from "@/external/maple/mapleTraceScope.js";
 import { isTransientRedisError } from "@/external/redis/utils/isTransientRedisError.js";
 import {
 	runStripeWebhookReplay,
@@ -56,6 +61,8 @@ const actionHandlers = [
 export interface SqsJob {
 	name: string;
 	data: any;
+	/** W3C trace context of the request that queued the job; only kept Maple traces carry it. */
+	traceparent?: string;
 }
 
 const isClaimContestedError = ({ error }: { error: unknown }): boolean => {
@@ -470,6 +477,10 @@ export const processMessage = async ({
 	const sentAtMs = Number(message.Attributes?.SentTimestamp);
 	const receiveCount = Number(message.Attributes?.ApproximateReceiveCount);
 
+	// Decided while the job runs: a sampled-out trace loses its mark once it ends.
+	let isLogReplaced = false;
+	let failed = false;
+
 	try {
 		await withWorkerSpan({
 			workflowName: job.name,
@@ -480,6 +491,9 @@ export const processMessage = async ({
 				customer_id: job.data?.customerId,
 			},
 			attributes: {
+				"messaging.system": "aws_sqs",
+				"messaging.operation.type": "process",
+				"autumn.job_name": job.name,
 				...(Number.isFinite(sentAtMs) && {
 					"queue.dwell_ms": Math.max(0, Date.now() - sentAtMs),
 				}),
@@ -487,9 +501,21 @@ export const processMessage = async ({
 					"queue.receive_count": receiveCount,
 				}),
 			},
-			fn: executeJob,
+			traceparent: job.traceparent,
+			fn: () => {
+				markJobTraceForMaple({
+					jobName: job.name,
+					isContinued: Boolean(job.traceparent),
+				});
+				isLogReplaced = isLogReplacedByMapleTrace({
+					traceId: trace.getActiveSpan()?.spanContext().traceId,
+					failed: false,
+				});
+				return executeJob();
+			},
 		});
 	} catch (error) {
+		failed = true;
 		const ctx = workerCtx ?? { logger: workerLogger };
 		// Sync jobs: re-throw infrastructure errors so the message stays in SQS.
 		// Application errors (RecaseError, InternalError) are swallowed — they
@@ -506,7 +532,7 @@ export const processMessage = async ({
 		}
 		if (willRetry) throw error;
 	} finally {
-		if (workerCtx) {
+		if (workerCtx && (failed || !isLogReplaced)) {
 			logContextExtras({ ctx: workerCtx, message: `[${job.name}] Finished` });
 		}
 	}

@@ -1,21 +1,31 @@
 /**
  * Contract: billing, webhooks and state-changing calls reach Maple whole; reads
  * and the hot path only with scope `api`, sampled at the root but always kept
- * when the request failed or was slow.
+ * when the request failed, was denied or was slow. Worker jobs follow the same
+ * scopes, and a trace sent to Maple can stand in for its request log line.
  */
 
 import { describe, expect, test } from "bun:test";
-import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { type Attributes, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import type {
 	ReadableSpan,
 	SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import {
+	classifyMapleJob,
 	classifyMapleRequest,
+	isLogReplacedByMapleTrace,
 	type MapleTraceMode,
 	type MapleTraceScope,
+	markTraceForMaple,
+	recordLogAsMapleSpanEvent,
 } from "@/external/maple/mapleTraceScope.js";
+import { JobName } from "@/queue/JobName.js";
 import { MapleScopedSpanProcessor } from "@/utils/otel/MapleScopedSpanProcessor.js";
+import {
+	formatTraceparent,
+	parseTraceparent,
+} from "@/utils/otel/traceparent.js";
 
 const TRACE = "a".repeat(32);
 const ROOT = "0000000000000001";
@@ -24,15 +34,17 @@ const createSpan = ({
 	spanId,
 	durationMs = 5,
 	statusCode = 200,
+	attributes,
 }: {
 	spanId: string;
 	durationMs?: number;
 	statusCode?: number;
+	attributes?: Attributes;
 }): ReadableSpan =>
 	({
 		name: "span",
 		kind: SpanKind.SERVER,
-		attributes: { "http.response.status_code": statusCode },
+		attributes: { "http.response.status_code": statusCode, ...attributes },
 		resource: {} as ReadableSpan["resource"],
 		instrumentationScope: { name: "test" },
 		status: { code: SpanStatusCode.UNSET },
@@ -50,9 +62,11 @@ const createSpan = ({
 
 class CapturingSpanProcessor implements SpanProcessor {
 	readonly ended: string[] = [];
+	readonly spans: ReadableSpan[] = [];
 	onStart(): void {}
 	onEnd(span: ReadableSpan): void {
 		this.ended.push(span.spanContext().spanId);
+		this.spans.push(span);
 	}
 	forceFlush(): Promise<void> {
 		return Promise.resolve();
@@ -135,6 +149,114 @@ describe("classifyMapleRequest", () => {
 	});
 });
 
+describe("classifyMapleJob", () => {
+	const classify = (jobName: JobName, scope: MapleTraceScope = "writes") =>
+		classifyMapleJob({ jobName, scope });
+
+	test("keeps billing jobs in every scope", () => {
+		for (const jobName of [
+			JobName.AutoTopUp,
+			JobName.StripeWebhookReplay,
+			JobName.StoreInvoiceLineItems,
+			JobName.StoreDeferredInvoiceLineItems,
+		]) {
+			for (const scope of ["billing", "writes", "api"] as const) {
+				expect(classify(jobName, scope)).toBe("keep");
+			}
+		}
+	});
+
+	test("samples hot jobs with scope api and leaves them out otherwise", () => {
+		for (const jobName of [
+			JobName.Track,
+			JobName.InsertEventBatch,
+			JobName.SyncBalanceBatchV4,
+			JobName.SyncCustomerDirty,
+			JobName.PersistPublishedBalanceTransitions,
+			JobName.RefreshEntityAggregate,
+			JobName.UpdateUsage,
+			JobName.UpdateBalance,
+		]) {
+			expect(classify(jobName, "billing")).toBeNull();
+			expect(classify(jobName)).toBeNull();
+			expect(classify(jobName, "api")).toBe("sample");
+		}
+	});
+
+	test("keeps every other job unless the scope is billing", () => {
+		for (const jobName of [
+			JobName.SendProductsUpdated,
+			JobName.GrantCheckoutReward,
+			JobName.FinalizeLock,
+		]) {
+			expect(classify(jobName, "billing")).toBeNull();
+			expect(classify(jobName)).toBe("keep");
+			expect(classify(jobName, "api")).toBe("keep");
+		}
+	});
+});
+
+describe("isLogReplacedByMapleTrace", () => {
+	const marked = "b".repeat(32);
+	markTraceForMaple({ traceId: marked, rootSpanId: ROOT, mode: "sample" });
+
+	test("replaces the log line of a marked trace that did not fail", () => {
+		expect(
+			isLogReplacedByMapleTrace({
+				traceId: marked,
+				failed: false,
+				enabled: true,
+			}),
+		).toBe(true);
+	});
+
+	test("keeps the log line when failed, unmarked, untraced or switched off", () => {
+		for (const params of [
+			{ traceId: marked, failed: true, enabled: true },
+			{ traceId: "c".repeat(32), failed: false, enabled: true },
+			{ traceId: undefined, failed: false, enabled: true },
+			{ traceId: marked, failed: false, enabled: false },
+		]) {
+			expect(isLogReplacedByMapleTrace(params)).toBe(false);
+		}
+	});
+});
+
+describe("recordLogAsMapleSpanEvent", () => {
+	test("leaves the line to the logger when off, not info, or outside a trace", () => {
+		const args = ["cache filled"];
+		expect(recordLogAsMapleSpanEvent({ args, level: 30, enabled: false })).toBe(
+			false,
+		);
+		expect(recordLogAsMapleSpanEvent({ args, level: 40, enabled: true })).toBe(
+			false,
+		);
+		expect(recordLogAsMapleSpanEvent({ args, level: 30, enabled: true })).toBe(
+			false,
+		);
+	});
+});
+
+describe("traceparent", () => {
+	test("round-trips a span context as a remote parent", () => {
+		const traceparent = formatTraceparent({
+			spanContext: { traceId: TRACE, spanId: ROOT, traceFlags: 1 },
+		});
+		expect(traceparent).toBe(`00-${TRACE}-${ROOT}-01`);
+		expect(parseTraceparent({ traceparent })).toEqual({
+			traceId: TRACE,
+			spanId: ROOT,
+			traceFlags: 1,
+			isRemote: true,
+		});
+	});
+
+	test("ignores a missing or malformed header", () => {
+		expect(parseTraceparent({})).toBeUndefined();
+		expect(parseTraceparent({ traceparent: "00-abc-def-01" })).toBeUndefined();
+	});
+});
+
 describe("MapleScopedSpanProcessor", () => {
 	test("forwards kept traces as spans end", () => {
 		const { processor, delegate } = processorFor({
@@ -174,6 +296,42 @@ describe("MapleScopedSpanProcessor", () => {
 				ROOT,
 				"0000000000000003",
 			]);
+		}
+	});
+
+	test("keeps a sampled trace whose root was a client error or a denial", () => {
+		for (const root of [
+			createSpan({ spanId: ROOT, statusCode: 404 }),
+			createSpan({ spanId: ROOT, attributes: { "maple.keep": true } }),
+		]) {
+			const { processor, delegate } = processorFor({
+				mode: "sample",
+				sampleRate: 0,
+			});
+			processor.onEnd(createSpan({ spanId: "0000000000000002" }));
+			processor.onEnd(root);
+			expect(delegate.ended).toEqual(["0000000000000002", ROOT]);
+		}
+	});
+
+	test("sends child spans without the tenant attrs the root carries", () => {
+		const tenant = { org_id: "org_1", customer_id: "cus_1" };
+		for (const mode of ["keep", "sample"] as const) {
+			const { processor, delegate } = processorFor({ mode, sampleRate: 1 });
+			processor.onEnd(
+				createSpan({
+					spanId: "0000000000000002",
+					attributes: { ...tenant, "db.system": "postgresql" },
+				}),
+			);
+			processor.onEnd(createSpan({ spanId: ROOT, attributes: tenant }));
+
+			const [child, root] = delegate.spans;
+			expect(child.attributes).toEqual({
+				"http.response.status_code": 200,
+				"db.system": "postgresql",
+			});
+			expect(root.attributes).toMatchObject(tenant);
 		}
 	});
 
