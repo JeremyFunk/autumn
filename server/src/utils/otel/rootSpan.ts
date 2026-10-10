@@ -42,14 +42,22 @@ export const getRootSpan = (
  */
 export const setRootSpanAttributes = (
 	attrs: Attributes | (() => Attributes),
+	{
+		overwrite = true,
+	}: {
+		/** False for a step shared by several operations, so the one that started keeps its name. */
+		overwrite?: boolean;
+	} = {},
 ) => {
 	if (!isMapleEnabled) return;
 	try {
 		const span = getRootSpan();
 		if (!span) return;
 		const resolved = typeof attrs === "function" ? attrs() : attrs;
+		const existing = (span as { attributes?: Attributes }).attributes ?? {};
 		for (const [key, value] of Object.entries(resolved)) {
 			if (value === undefined) continue;
+			if (!overwrite && key in existing) continue;
 			span.setAttribute(key, value);
 		}
 	} catch {

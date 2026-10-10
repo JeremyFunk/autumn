@@ -28,9 +28,15 @@ export const logUpdateSubscriptionContext = ({
 
 	const fullProduct = fullProducts[0];
 
+	// The preview runs this too, and keeps its own name.
+	setRootSpanAttributes(
+		{
+			"billing.action":
+				cancelAction && cancelAction !== "uncancel" ? "cancel" : "update",
+		},
+		{ overwrite: false },
+	);
 	setRootSpanAttributes({
-		"billing.action":
-			cancelAction && cancelAction !== "uncancel" ? "cancel" : "update",
 		"billing.plan_id": customerProduct.product.id,
 		"billing.plan_version": customerProduct.product.version,
 		"billing.checkout_mode": billingContext.checkoutMode ?? undefined,

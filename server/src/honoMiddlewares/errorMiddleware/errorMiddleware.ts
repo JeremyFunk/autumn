@@ -97,8 +97,19 @@ export const errorMiddleware = (err: Error, c: Context<HonoEnv>) => {
 			operation: `${c.req.method} ${c.req.routePath}`,
 		});
 
+	// An expected caller error on a trace going to Maple is fully described by
+	// its span. Anything classified as infra or a bug still reports, whatever
+	// the status: a Stripe outage answers 400 here.
+	const isReplacedByTrace =
+		Boolean(ctx?.logger) &&
+		isLogReplacedByMapleTrace({
+			traceId: trace.getActiveSpan()?.spanContext().traceId,
+			failed: false,
+		}) &&
+		classifyError({ error }).kind === "expected";
+	if (!isReplacedByTrace) report();
+
 	if (!ctx?.logger) {
-		report();
 		setErrorSpanAttributes({ error, statusCode: 500 });
 		return c.json(
 			{ message: "Internal server error", code: ErrCode.InternalError },
@@ -107,15 +118,7 @@ export const errorMiddleware = (err: Error, c: Context<HonoEnv>) => {
 	}
 	const response = errorToResponse({ c, error, env: ctx.env });
 	setErrorSpanAttributes({ error, statusCode: response.status });
-	// An expected caller error is fully described by its span. Anything
-	// classified as infra or a bug still reports, whatever the status: a
-	// Stripe outage answers 400 here.
-	const isReplacedByTrace =
-		classifyError({ error }).kind === "expected" &&
-		isLogReplacedByMapleTrace({
-			traceId: trace.getActiveSpan()?.spanContext().traceId,
-			failed: response.status >= 500,
-		});
-	if (!isReplacedByTrace) report();
+	// An expected error answered with a 5xx is still a failure to report.
+	if (isReplacedByTrace && response.status >= 500) report();
 	return response;
 };

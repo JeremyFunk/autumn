@@ -1,4 +1,5 @@
 import { SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
 
 const tracer = trace.getTracer("autumn.dynamodb");
 
@@ -18,7 +19,12 @@ export const withDynamoSpan = async <T>({
 }): Promise<T> =>
 	tracer.startActiveSpan(
 		`dynamodb.${name}`,
-		{ kind: SpanKind.CLIENT, attributes: { "db.system.name": "aws.dynamodb" } },
+		{
+			kind: SpanKind.CLIENT,
+			...(isMapleEnabled && {
+				attributes: { "db.system.name": "aws.dynamodb" },
+			}),
+		},
 		async (span) => {
 			if (attributes) span.setAttributes(attributes);
 

@@ -1,5 +1,6 @@
 import { context, SpanKind, SpanStatusCode, trace } from "@opentelemetry/api";
 import { getAwsTaskIdentity } from "@/external/aws/ecs/awsTaskIdentity.js";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
 import { withRootSpan } from "./rootSpan.js";
 import { type TenantAttrs, withTenantContext } from "./tenantContext.js";
 import { parseTraceparent } from "./traceparent.js";
@@ -28,7 +29,10 @@ export const withWorkerSpan = async <T>({
 	traceparent?: string;
 	fn: () => Promise<T>;
 }): Promise<T> => {
-	const parentSpanContext = parseTraceparent({ traceparent });
+	// Only a process that exports to Maple continues a request's trace.
+	const parentSpanContext = isMapleEnabled
+		? parseTraceparent({ traceparent })
+		: undefined;
 	const parentContext = parentSpanContext
 		? trace.setSpanContext(context.active(), parentSpanContext)
 		: context.active();

@@ -39,12 +39,15 @@ const defaultMarks: TraceMarks = {
 const durationMs = (span: ReadableSpan) =>
 	span.duration[0] * 1000 + span.duration[1] / 1_000_000;
 
-// Denials and client errors are what investigations look for, so they are never sampled out.
+const TOO_MANY_REQUESTS = 429;
+
+// Denials and client errors are what investigations look for, so they are
+// never sampled out. Rate limiting is the exception: it arrives as a storm.
 const isAlwaysKeptRoot = (span: ReadableSpan) => {
 	const status = Number(span.attributes["http.response.status_code"]);
 	return (
 		span.status.code === SpanStatusCode.ERROR ||
-		status >= 400 ||
+		(status >= 400 && status !== TOO_MANY_REQUESTS) ||
 		span.attributes["maple.keep"] === true
 	);
 };
@@ -84,37 +87,46 @@ export class MapleScopedSpanProcessor implements SpanProcessor {
 		const { traceId, spanId } = span.spanContext();
 		const mark = this.options.marks.get(traceId);
 		if (!mark) return;
-		// Every request or job span of the trace keeps its tenant attrs; only the
-		// first one decides a sampled trace.
+
+		// Every request or job span of the trace is a root: it keeps its tenant
+		// attrs, and any of them can decide a sampled trace.
 		const isRoot =
 			spanId === mark.rootSpanId || mark.rootSpanIds?.has(spanId) === true;
 		const exported = isRoot ? span : withoutTenantAttrs(span);
 		if (mark.mode === "keep") {
-			// A trace promoted mid-flight (a second, kept request under the same
-			// trace id) still has spans waiting on the first root's verdict.
+			// A trace promoted mid-flight still has spans waiting on a verdict.
 			this.flush(traceId);
 			this.delegate.onEnd(exported);
 			return;
 		}
-		if (spanId !== mark.rootSpanId) {
+		if (!isRoot) {
 			this.buffer(traceId, exported);
 			return;
 		}
 
-		const buffered = this.buffers.get(traceId) ?? [];
-		this.buffers.delete(traceId);
 		const kept =
 			isAlwaysKeptRoot(span) ||
 			durationMs(span) >= this.options.slowMs ||
 			isInMapleSampleRate({ traceId, sampleRate: this.options.sampleRate });
-		if (!kept) {
+		if (kept) {
+			// Spans that end after this root (async work, other roots) follow the same verdict.
+			this.options.marks.promote(traceId);
+			this.flush(traceId);
+			this.delegate.onEnd(exported);
+			return;
+		}
+
+		// Not kept on its own account. While another request of the trace is
+		// still running it may yet be, so the verdict passes to that one.
+		mark.rootSpanIds?.delete(spanId);
+		const nextRootSpanId = mark.rootSpanIds?.values().next().value;
+		if (nextRootSpanId === undefined) {
+			this.buffers.delete(traceId);
 			this.options.marks.unmark(traceId);
 			return;
 		}
-		// Spans that end after the root (async work) follow the same verdict.
-		this.options.marks.promote(traceId);
-		for (const child of buffered) this.delegate.onEnd(child);
-		this.delegate.onEnd(span);
+		if (mark.rootSpanId === spanId) mark.rootSpanId = nextRootSpanId;
+		this.buffer(traceId, exported);
 	}
 
 	private flush(traceId: string) {

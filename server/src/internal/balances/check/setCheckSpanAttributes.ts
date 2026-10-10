@@ -24,5 +24,5 @@ export const setCheckSpanAttributes = ({
 		"check.balance": balance,
 		"check.deny_reason": allowed ? undefined : (denyReason ?? undefined),
 		"check.fail_open": failOpen || undefined,
-		"maple.keep": allowed ? undefined : true,
+		"maple.keep": allowed && !failOpen ? undefined : true,
 	});

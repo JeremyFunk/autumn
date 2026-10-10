@@ -30,8 +30,9 @@ export const logAttachContext = ({
 		trialContext,
 	} = billingContext;
 
+	// Setup-payment and the previews run this too, and keep their own name.
+	setRootSpanAttributes({ "billing.action": "attach" }, { overwrite: false });
 	setRootSpanAttributes({
-		"billing.action": "attach",
 		"billing.plan_id": attachProduct.id,
 		"billing.plan_version": attachProduct.version,
 		"billing.from_plan_id": currentCustomerProduct?.product.id,

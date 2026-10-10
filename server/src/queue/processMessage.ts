@@ -7,11 +7,11 @@ import type { Logger } from "pino";
 import { isTransientDbError } from "@/db/dbUtils.js";
 import type { DrizzleCli } from "@/db/initDrizzle.js";
 import { logger } from "@/external/logtail/logtailUtils.js";
+import { isMapleEnabled } from "@/external/maple/mapleEnabled.js";
 import {
 	isLogReplacedByMapleTrace,
 	markJobTraceForMaple,
 } from "@/external/maple/mapleTraceScope.js";
-import { setMapleExtrasSpanAttribute } from "@/external/maple/setMapleExtrasSpanAttribute.js";
 import { isTransientRedisError } from "@/external/redis/utils/isTransientRedisError.js";
 import {
 	runStripeWebhookReplay,
@@ -493,9 +493,11 @@ export const processMessage = async ({
 				customer_id: job.data?.customerId,
 			},
 			attributes: {
-				"messaging.system": "aws_sqs",
-				"messaging.operation.type": "process",
-				"autumn.job_name": job.name,
+				...(isMapleEnabled && {
+					"messaging.system": "aws_sqs",
+					"messaging.operation.type": "process",
+					"autumn.job_name": job.name,
+				}),
 				...(Number.isFinite(sentAtMs) && {
 					"queue.dwell_ms": Math.max(0, Date.now() - sentAtMs),
 				}),
@@ -504,24 +506,18 @@ export const processMessage = async ({
 				}),
 			},
 			traceparent: job.traceparent,
-			fn: async () => {
-				const span = trace.getActiveSpan();
+			fn: () => {
 				markJobTraceForMaple({
 					jobName: job.name,
 					isContinued:
+						isMapleEnabled &&
 						parseTraceparent({ traceparent: job.traceparent }) !== undefined,
 				});
 				isLogReplaced = isLogReplacedByMapleTrace({
-					traceId: span?.spanContext().traceId,
+					traceId: trace.getActiveSpan()?.spanContext().traceId,
 					failed: false,
 				});
-				try {
-					return await executeJob();
-				} finally {
-					// The job span is still open here; the "Finished" line it replaces is logged after it ends.
-					if (isLogReplaced)
-						setMapleExtrasSpanAttribute({ extraLogs: workerCtx?.extraLogs });
-				}
+				return executeJob();
 			},
 		});
 	} catch (error) {

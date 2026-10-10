@@ -1,5 +1,6 @@
 import { context, SpanStatusCode, trace } from "@opentelemetry/api";
 import type { Context, Next } from "hono";
+import { addMapleTraceRoot } from "@/external/maple/mapleTraceScope.js";
 import { setRootSpan } from "@/utils/otel/rootSpan.js";
 import { enqueueStripeWebhookReplay } from "../webhookReplay/enqueueStripeWebhookReplay.js";
 import { stripeWebhookErrorWouldRedeliver } from "../webhookReplay/stripeWebhookErrorWouldRedeliver.js";
@@ -78,6 +79,7 @@ export const stripeWebhookAckMiddleware = async (
 	// Bound as the root span too: what the handler decides after the ack is
 	// stamped here, the HTTP span having ended.
 	const deferredSpan = tracer.startSpan("stripe.webhook.deferred");
+	addMapleTraceRoot(deferredSpan);
 	const ctxWithSpan = setRootSpan({
 		context: trace.setSpan(context.active(), deferredSpan),
 		span: deferredSpan,

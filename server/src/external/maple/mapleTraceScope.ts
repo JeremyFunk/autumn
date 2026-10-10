@@ -1,7 +1,7 @@
-import { context, trace } from "@opentelemetry/api";
+import { context, type Span, trace } from "@opentelemetry/api";
 import type { MiddlewareHandler } from "hono";
 import { JobName } from "@/queue/JobName.js";
-import { withRootSpan } from "@/utils/otel/rootSpan.js";
+import { getRootSpan, withRootSpan } from "@/utils/otel/rootSpan.js";
 import { isMapleEnabled } from "./mapleEnabled.js";
 import { isInMapleSampleRate } from "./mapleSampling.js";
 import { BILLING_PATHS } from "./parseMapleLog.js";
@@ -55,22 +55,32 @@ const BILLING_JOBS = new Set<string>([
 	JobName.StoreDeferredInvoiceLineItems,
 ]);
 
-// `get_or_create` reads like a read but creates the customer and attaches defaults.
-const WRITE_ACTIONS = new Set(["get_or_create"]);
+// Reads whose name does not say so. `get_or_create` counts as one: when it
+// does create a customer, the handler asks for the trace to be kept.
 const READ_ACTIONS = new Set([
 	"get",
 	"aggregate",
 	"search",
 	"query",
 	"has_customers",
+	"verify",
+	"resolve_request",
+	"sync_proposals",
+	"sync_proposals_v2",
+	"revenuecat_mappings",
+	"diff",
+	"customer_counts",
+	"search_endpoints",
 ]);
 
 const isReadAction = (action: string) =>
-	!WRITE_ACTIONS.has(action) &&
-	(READ_ACTIONS.has(action) ||
-		action.startsWith("get_") ||
-		action.startsWith("list") ||
-		action.startsWith("preview"));
+	READ_ACTIONS.has(action) ||
+	action.startsWith("get_") ||
+	action.startsWith("list") ||
+	action.startsWith("preview");
+
+// Dashboard reads that are sent as POST.
+const DASHBOARD_READ_PREFIXES = ["/query/", "/workbench/", "/trmnl/"];
 
 // Legacy paths end in an id as often as in an action, so only exact names count.
 const LEGACY_READ_TAILS = new Set([
@@ -80,6 +90,9 @@ const LEGACY_READ_TAILS = new Set([
 	"search",
 	"query",
 	"has_customers",
+	"full_customers",
+	"count",
+	"onboardingStatus",
 ]);
 
 /** Whether a path names a read: `billing.preview_attach`, `customers.get`, `attach/preview`. */
@@ -105,10 +118,13 @@ export const classifyMapleRequest = ({
 	method,
 	path,
 	scope = MAPLE_TRACE_SCOPE,
+	isAuthenticated = false,
 }: {
 	method: string;
 	path: string;
 	scope?: MapleTraceScope;
+	/** Dashboard, CLI and admin changes are only kept once the caller is known, so a POST to a made-up path is not. */
+	isAuthenticated?: boolean;
 }): MapleTraceMode | null => {
 	const isWrite = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
 	if (isWrite && WEBHOOK_PREFIXES.some((p) => path.startsWith(p)))
@@ -123,12 +139,14 @@ export const classifyMapleRequest = ({
 		)
 			return "keep";
 		// Dashboard, CLI and admin changes.
-		if (scope === "billing" || !isWrite) return null;
-		return isReadPath(path.slice(1)) ? null : "keep";
+		if (scope === "billing" || !isWrite || !isAuthenticated) return null;
+		if (DASHBOARD_READ_PREFIXES.some((p) => path.startsWith(p))) return null;
+		return method === "POST" && isReadPath(path.slice(1)) ? null : "keep";
 	}
 
 	const rest = path.slice("/v1/".length);
-	const isRead = isReadPath(rest);
+	// Only a POST can be a read by name; PUT, PATCH and DELETE never are.
+	const isRead = method === "POST" && isReadPath(rest);
 	const isBilling =
 		method === "POST" &&
 		!isRead &&
@@ -139,14 +157,20 @@ export const classifyMapleRequest = ({
 	const segment = rest.split("/")[0] ?? "";
 	const dot = segment.lastIndexOf(".");
 	const isHotOrRead =
+		!isWrite ||
 		isRead ||
+		// Legacy identify: creates the customer only the first time.
+		(method === "POST" && rest === "customers") ||
 		(dot === -1
-			? method === "GET" || HOT_LEGACY_SEGMENTS.has(segment)
+			? HOT_LEGACY_SEGMENTS.has(segment)
 			: HOT_ACTIONS.has(segment.slice(dot + 1)));
 
 	if (!isHotOrRead) return "keep";
 	return scope === "api" ? "sample" : null;
 };
+
+/** Batch and per-event jobs are sent from timers that outlive the request that armed them, so they never join a request's trace. */
+export const isHotMapleJob = (jobName: string) => HOT_JOBS.has(jobName);
 
 /** Worker jobs follow the request scopes: billing jobs always, hot jobs sampled with scope `api`, the rest unless the scope is `billing`. */
 export const classifyMapleJob = ({
@@ -226,6 +250,33 @@ export const mapleTraceScopeMiddleware: MiddlewareHandler = (c, next) => {
 	return withRootSpan({ span, fn: next });
 };
 
+/**
+ * Marks a request whose caller is now known. Runs after auth, where the
+ * dashboard, CLI and admin routes that the first pass leaves alone are decided.
+ */
+export const markAuthenticatedRequestForMaple = ({
+	method,
+	path,
+}: {
+	method: string;
+	path: string;
+}) => {
+	if (!isMapleEnabled) return;
+	const span = getRootSpan();
+	if (!span) return;
+	const mode = classifyMapleRequest({ method, path, isAuthenticated: true });
+	if (!mode) return;
+
+	const { traceId, spanId } = span.spanContext();
+	markTraceForMaple({ traceId, rootSpanId: spanId, mode });
+};
+
+/** A further span that carries tenant attrs in a trace already going to Maple, e.g. the deferred half of an early-acked webhook. */
+export const addMapleTraceRoot = (span: Span) => {
+	const { traceId, spanId } = span.spanContext();
+	getMapleTraceMark(traceId)?.rootSpanIds.add(spanId);
+};
+
 /** Marks the active worker span's trace. A job continuing a request's trace is kept, since only kept traces propagate. */
 export const markJobTraceForMaple = ({
 	jobName,
@@ -243,14 +294,15 @@ export const markJobTraceForMaple = ({
 	markTraceForMaple({ traceId, rootSpanId: spanId, mode });
 };
 
-const REPLACE_REQUEST_LOGS =
+/** Whether a trace sent to Maple stands in for log lines at all. */
+export const isMapleLogReplacementEnabled =
 	isMapleEnabled && process.env.MAPLE_REPLACE_REQUEST_LOGS === "true";
 
 /** True when the trace sent to Maple stands in for a request or job log line. Failures always log. */
 export const isLogReplacedByMapleTrace = ({
 	traceId,
 	failed,
-	enabled = REPLACE_REQUEST_LOGS,
+	enabled = isMapleLogReplacementEnabled,
 }: {
 	traceId: string | undefined;
 	failed: boolean;
@@ -263,44 +315,56 @@ export const isLogReplacedByMapleTrace = ({
 
 const PINO_INFO_LEVEL = 30;
 
+type LogArgs = [Record<string, unknown>, ...unknown[]];
+
 /**
- * An info line logged under a trace going to Maple is slimmed, not dropped:
- * it keeps its message and fields and gains the ids of the span it was logged
- * under, and loses the request and tenant bindings the root span already
- * states once. Lines of a sampled trace follow the trace's sample rate.
+ * A line logged under a trace going to Maple gains the ids of the span it was
+ * logged under. An info line is also slimmed: it loses the request and tenant
+ * context the root span already states once, and for a sampled trace it
+ * follows the trace's sample rate. Warnings and errors keep everything.
  *
- * Returns the line to write without bindings, "drop", or undefined to leave
- * the line as it is.
+ * `bindings` are the logger's own: a slimmed line is written through the root
+ * logger with the bindings it keeps. Returns "drop", or undefined to leave the
+ * line as it is.
  */
 export const slimMapleLogLine = ({
 	args,
 	level,
-	enabled = REPLACE_REQUEST_LOGS,
+	bindings,
+	span = trace.getActiveSpan(),
+	enabled = isMapleLogReplacementEnabled,
+	isInSampleRate = isInMapleSampleRate,
 }: {
 	args: unknown[];
 	level: number;
+	bindings: () => Record<string, unknown>;
+	span?: Span;
 	enabled?: boolean;
-}): [Record<string, unknown>, ...unknown[]] | "drop" | undefined => {
-	if (!enabled || level !== PINO_INFO_LEVEL) return undefined;
+	isInSampleRate?: (args: { traceId: string }) => boolean;
+}): { args: LogArgs; slimmed: boolean } | "drop" | undefined => {
+	if (!enabled || level < PINO_INFO_LEVEL || !span?.isRecording())
+		return undefined;
 	try {
-		const span = trace.getActiveSpan();
-		if (!span) return undefined;
 		const { traceId, spanId } = span.spanContext();
 		const mark = getMapleTraceMark(traceId);
 		if (!mark) return undefined;
-		if (mark.mode === "sample" && !isInMapleSampleRate({ traceId }))
-			return "drop";
 
 		const [first, ...rest] = args;
+		const hasFields = first !== null && typeof first === "object";
+		const fields = hasFields ? (first as Record<string, unknown>) : {};
+		const tail = hasFields ? rest : args;
 		const ids = { trace_id: traceId, span_id: spanId };
-		if (first === null || typeof first !== "object") return [ids, ...args];
-		// The request and tenant context ride on each line's fields, not on logger bindings.
-		const {
-			req: _req,
-			context: _context,
-			...fields
-		} = first as Record<string, unknown>;
-		return [{ ...fields, ...ids }, ...rest];
+		if (level > PINO_INFO_LEVEL)
+			return { args: [{ ...fields, ...ids }, ...tail], slimmed: false };
+
+		if (mark.mode === "sample" && !isInSampleRate({ traceId })) return "drop";
+		// `req` rides on the line's fields and `context` on the logger's bindings.
+		const { req: _req, ...ownFields } = fields;
+		const { context: _context, ...ownBindings } = bindings();
+		return {
+			args: [{ ...ownBindings, ...ownFields, ...ids }, ...tail],
+			slimmed: true,
+		};
 	} catch {
 		return undefined;
 	}

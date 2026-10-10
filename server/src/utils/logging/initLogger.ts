@@ -272,14 +272,20 @@ export const initLogger = (options: InitLoggerOptions = {}) => {
 			},
 			hooks: {
 				logMethod(args, method, level) {
-					const slim = slimMapleLogLine({ args, level });
-					if (slim === "drop") return;
-					// Written through the root logger, which has none of the request bindings.
-					if (slim) {
-						method.apply(logger, slim as typeof args);
-						return;
-					}
-					errorLogHook?.call(this, args, method, level);
+					const line = slimMapleLogLine({
+						args,
+						level,
+						bindings: () => this.bindings(),
+					});
+					if (line === "drop") return;
+					// A slimmed line goes through the root logger: it carries the
+					// bindings it keeps itself, and the tenant context is not one.
+					errorLogHook?.call(
+						line?.slimmed ? logger : this,
+						(line?.args ?? args) as typeof args,
+						method,
+						level,
+					);
 				},
 			},
 			// Tag every log line with this process's AWS task identity so Axiom

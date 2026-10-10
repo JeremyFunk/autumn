@@ -123,21 +123,20 @@ describe("classifyMapleRequest", () => {
 			"/v1/checkout",
 			"/v1/balances.create",
 			"/v1/balances.update",
-			"/v1/customers",
 			"/v1/customers.update",
 			"/v1/entities.delete",
 			"/v1/invoices.finalize",
 			"/webhooks/connect/live",
 			"/webhooks/revenuecat/org_1/live",
-			"/v1/customers.get_or_create",
 			"/v1/usage",
 			"/v1/customers/list_of_things",
 			"/checkouts/co_1/confirm",
-			"/products/copy_to_production",
 		]) {
 			expect(classify("POST", path)).toBe("keep");
 		}
 		expect(classify("DELETE", "/v1/customers/cus_1")).toBe("keep");
+		// An id that reads like an action is only a read on a POST.
+		expect(classify("DELETE", "/v1/customers/list")).toBe("keep");
 		expect(classify("PATCH", "/webhooks/vercel/v1/installations/i_1")).toBe(
 			"keep",
 		);
@@ -148,8 +147,28 @@ describe("classifyMapleRequest", () => {
 		expect(classify("POST", "/balance-worker-proxy", "api")).toBeNull();
 		expect(classify("GET", "/checkouts/co_1", "api")).toBeNull();
 		expect(classify("GET", "/webhooks/vercel/v1/installations/i_1")).toBeNull();
+	});
+
+	test("keeps a dashboard change only once the caller is known", () => {
+		const dashboard = (path: string, isAuthenticated: boolean) =>
+			classifyMapleRequest({
+				method: "POST",
+				path,
+				scope: "writes",
+				isAuthenticated,
+			});
+		expect(dashboard("/products/copy_to_production", true)).toBe("keep");
+		expect(dashboard("/products/copy_to_production", false)).toBeNull();
+		expect(dashboard("/wp-login.php", false)).toBeNull();
+		expect(dashboard("/query/events", true)).toBeNull();
+		expect(dashboard("/customers/all/full_customers", true)).toBeNull();
 		expect(
-			classify("POST", "/products/copy_to_production", "billing"),
+			classifyMapleRequest({
+				method: "POST",
+				path: "/products/copy_to_production",
+				scope: "billing",
+				isAuthenticated: true,
+			}),
 		).toBeNull();
 	});
 
@@ -159,6 +178,10 @@ describe("classifyMapleRequest", () => {
 			["POST", "/v1/balances.track"],
 			["POST", "/v1/customers.get"],
 			["POST", "/v1/customers.list"],
+			["POST", "/v1/customers.get_or_create"],
+			["POST", "/v1/customers"],
+			["HEAD", "/v1/customers/cus_1"],
+			["POST", "/v1/billing.verify"],
 			["POST", "/v1/customers/list"],
 			["POST", "/v1/billing.preview_attach"],
 			["POST", "/v1/attach/preview"],
@@ -264,17 +287,93 @@ describe("markTraceForMaple", () => {
 });
 
 describe("slimMapleLogLine", () => {
-	test("leaves the line alone when off, not info, or outside a trace", () => {
+	const fakeSpan = (traceId: string) =>
+		({
+			isRecording: () => true,
+			spanContext: () => ({ traceId, spanId: "s1", traceFlags: 1 }),
+		}) as Span;
+	const bindings = () => ({
+		context: { org_id: "org_1" },
+		stripe_event: { id: "evt_1" },
+	});
+	const slim = (
+		args: unknown[],
+		level: number,
+		traceId: string,
+		inRate = true,
+	) =>
+		slimMapleLogLine({
+			args,
+			level,
+			bindings,
+			span: fakeSpan(traceId),
+			enabled: true,
+			isInSampleRate: () => inRate,
+		});
+
+	test("leaves the line alone when off, below info, or outside a marked trace", () => {
 		const args = ["cache filled"];
+		const span = fakeSpan("e".repeat(32));
 		expect(
-			slimMapleLogLine({ args, level: 30, enabled: false }),
+			slimMapleLogLine({ args, level: 30, bindings, span, enabled: false }),
 		).toBeUndefined();
 		expect(
-			slimMapleLogLine({ args, level: 40, enabled: true }),
+			slimMapleLogLine({ args, level: 20, bindings, span, enabled: true }),
 		).toBeUndefined();
+		expect(slim(args, 30, "e".repeat(32))).toBeUndefined();
+	});
+
+	test("an info line loses request and tenant context and keeps the rest", () => {
+		const traceId = "1".repeat(32);
+		markTraceForMaple({ traceId, rootSpanId: "r1", mode: "keep" });
+		const fields = { req: { id: "req_1" }, plan: "pro" };
+
+		expect(slim([fields, "attached"], 30, traceId)).toEqual({
+			slimmed: true,
+			args: [
+				{
+					stripe_event: { id: "evt_1" },
+					plan: "pro",
+					trace_id: traceId,
+					span_id: "s1",
+				},
+				"attached",
+			],
+		});
+		// The caller's object is not touched.
+		expect(fields.req).toEqual({ id: "req_1" });
+		expect(slim(["attached"], 30, traceId)).toEqual({
+			slimmed: true,
+			args: [
+				{ stripe_event: { id: "evt_1" }, trace_id: traceId, span_id: "s1" },
+				"attached",
+			],
+		});
+	});
+
+	test("a warning only gains the span ids", () => {
+		const traceId = "2".repeat(32);
+		markTraceForMaple({ traceId, rootSpanId: "r1", mode: "sample" });
+
 		expect(
-			slimMapleLogLine({ args, level: 30, enabled: true }),
-		).toBeUndefined();
+			slim([{ req: { id: "req_1" } }, "cache incomplete"], 40, traceId, false),
+		).toEqual({
+			slimmed: false,
+			args: [
+				{ req: { id: "req_1" }, trace_id: traceId, span_id: "s1" },
+				"cache incomplete",
+			],
+		});
+	});
+
+	test("an info line of a sampled trace follows the sample rate", () => {
+		const traceId = "3".repeat(32);
+		markTraceForMaple({ traceId, rootSpanId: "r1", mode: "sample" });
+
+		expect(slim(["cache filled"], 30, traceId, false)).toBe("drop");
+		expect(slim(["cache filled"], 30, traceId, true)).toMatchObject({
+			slimmed: true,
+		});
 	});
 });
 
@@ -441,6 +540,67 @@ describe("MapleScopedSpanProcessor", () => {
 
 		expect(delegate.ended).toEqual(["0000000000000002", SECOND]);
 		expect(delegate.spans[1].attributes).toMatchObject(tenant);
+	});
+
+	test("a request that must be kept is, whichever request of the trace ends first", () => {
+		const SECOND = "0000000000000009";
+		const setup = () => {
+			const marks = new Map([
+				[
+					TRACE,
+					{
+						mode: "sample" as MapleTraceMode,
+						rootSpanId: ROOT,
+						rootSpanIds: new Set([ROOT, SECOND]),
+					},
+				],
+			]);
+			const delegate = new CapturingSpanProcessor();
+			const processor = new MapleScopedSpanProcessor(delegate, {
+				sampleRate: 0,
+				slowMs: 1000,
+				marks: {
+					get: (traceId) => marks.get(traceId),
+					promote: (traceId) => {
+						const mark = marks.get(traceId);
+						if (mark) mark.mode = "keep";
+					},
+					unmark: (traceId) => {
+						marks.delete(traceId);
+					},
+				},
+			});
+			return { marks, delegate, processor };
+		};
+
+		// The healthy first request ends before the failed second one.
+		const first = setup();
+		first.processor.onEnd(createSpan({ spanId: ROOT }));
+		expect(first.delegate.ended).toEqual([]);
+		first.processor.onEnd(createSpan({ spanId: SECOND, statusCode: 404 }));
+		expect(first.delegate.ended).toEqual([ROOT, SECOND]);
+
+		// The failed second request ends first.
+		const second = setup();
+		second.processor.onEnd(createSpan({ spanId: SECOND, statusCode: 404 }));
+		second.processor.onEnd(createSpan({ spanId: ROOT }));
+		expect(second.delegate.ended).toEqual([SECOND, ROOT]);
+
+		// Both healthy and out of the rate: nothing is exported, nothing lingers.
+		const neither = setup();
+		neither.processor.onEnd(createSpan({ spanId: SECOND }));
+		neither.processor.onEnd(createSpan({ spanId: ROOT }));
+		expect(neither.delegate.ended).toEqual([]);
+		expect(neither.marks.has(TRACE)).toBe(false);
+	});
+
+	test("a rate-limited request is sampled like a healthy one", () => {
+		const { processor, delegate } = processorFor({
+			mode: "sample",
+			sampleRate: 0,
+		});
+		processor.onEnd(createSpan({ spanId: ROOT, statusCode: 429 }));
+		expect(delegate.ended).toEqual([]);
 	});
 
 	test("keeps a healthy sampled trace that falls in the rate", () => {

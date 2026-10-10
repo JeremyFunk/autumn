@@ -10,7 +10,10 @@ import type {
 import { SendMessageCommand } from "@aws-sdk/client-sqs";
 import { type Span, SpanKind, trace } from "@opentelemetry/api";
 import { generateId } from "@server/utils/genUtils";
-import { getMapleTraceMark } from "@/external/maple/mapleTraceScope.js";
+import {
+	getMapleTraceMark,
+	isHotMapleJob,
+} from "@/external/maple/mapleTraceScope.js";
 import type { StripeWebhookReplayPayload } from "@/external/stripe/webhookReplay/runStripeWebhookReplay.js";
 import type { BatchResetCustomerEntitlementsV2Payload } from "@/internal/balances/batchReset/types.js";
 import type { TokenDeduction } from "@/internal/balances/utils/types/featureDeduction.js";
@@ -204,9 +207,12 @@ export const addTaskToQueue = async <T extends keyof Payloads>({
 		// The send is a span only for traces going to Maple, so nothing is added
 		// to the hot path otherwise.
 		const activeTraceId = trace.getActiveSpan()?.spanContext().traceId;
-		const mapleMode = activeTraceId
-			? getMapleTraceMark(activeTraceId)?.mode
-			: undefined;
+		// Batch jobs are sent from a timer that still holds the context of the
+		// last request to arm it, so they are left out of that request's trace.
+		const mapleMode =
+			activeTraceId && !isHotMapleJob(jobName as string)
+				? getMapleTraceMark(activeTraceId)?.mode
+				: undefined;
 
 		const send = async (span?: Span) => {
 			const sqsClient = getSqsClient({ queueUrl: resolvedQueueUrl });
