@@ -74,7 +74,7 @@ export const stripeWebhookAckMiddleware = async (
 
 	// Start a span that survives past the early-ack response. Parented to the
 	// still-active root HTTP span; ended in finally(...) when deferred work
-	// completes so traceEnrichMiddleware + child spans land on a live span.
+	// completes so child spans land on a live span.
 	// Bound as the root span too: what the handler decides after the ack is
 	// stamped here, the HTTP span having ended.
 	const deferredSpan = tracer.startSpan("stripe.webhook.deferred");

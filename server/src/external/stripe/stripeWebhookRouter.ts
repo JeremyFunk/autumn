@@ -24,11 +24,12 @@ stripeWebhookRouter.post(
 	stripeLegacySeederMiddleware,
 	stripeToAutumnCustomerMiddleware,
 	stripeIdempotencyMiddleware,
+	// Before the ack: an early ack ends the HTTP span, which must carry the tenant.
+	traceEnrichMiddleware,
 	stripeWebhookAckMiddleware,
 	stripeWebhookRefreshMiddleware,
 	stripeSyncMiddleware,
 	stripeLoggerMiddleware,
-	traceEnrichMiddleware,
 	handleStripeWebhookEvent,
 );
 
@@ -38,10 +39,11 @@ stripeWebhookRouter.post(
 	stripeConnectSeederMiddleware,
 	stripeToAutumnCustomerMiddleware,
 	stripeIdempotencyMiddleware,
+	// Before the ack: an early ack ends the HTTP span, which must carry the tenant.
+	traceEnrichMiddleware,
 	stripeWebhookAckMiddleware,
 	stripeWebhookRefreshMiddleware,
 	stripeSyncMiddleware,
 	stripeLoggerMiddleware,
-	traceEnrichMiddleware,
 	handleStripeWebhookEvent,
 );
